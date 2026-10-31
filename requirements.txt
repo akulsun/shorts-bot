@@ -1,0 +1,6 @@
+faster-whisper==1.2.1
+# faster-whisper 1.2.1 calls av.open(..., metadata_errors=...), which PyAV
+# removed in v17. Do not bump past 16 until faster-whisper is updated.
+av==16.1.0
+yt-dlp>=2026.10.26
+PyYAML>=6.0

@@ -1,0 +1,81 @@
+# Shorts Bot configuration.
+# Relative paths are resolved from the folder containing this file.
+
+logging:
+  level: INFO
+  file: temp/shortsbot.log
+
+paths:
+  downloads: downloads
+  temp: temp
+  output: output
+
+download:
+  max_height: 1080
+  # Optional: pull cookies from a browser ("chrome", "firefox", ...) when a
+  # video is age-restricted. Leave null for normal videos.
+  cookies_from_browser: null
+
+transcription:
+  # tiny | base | small | medium | large-v3
+  # "small" is the intended default; "base" is used while testing stages 2-4.
+  model_size: base
+  compute_type: int8
+  cpu_threads: 6
+  # null = auto-detect language
+  language: null
+  vad_filter: true
+  beam_size: 5
+
+selection:
+  # Swap point for clip picking. "heuristic" is built in.
+  selector: heuristic
+  min_seconds: 20
+  max_seconds: 60
+  max_clips: 3
+  keywords:
+    - mistake
+    - secret
+    - never
+    - always
+    - biggest
+    - worst
+    - best
+    - free
+    - money
+    - how to
+    - why
+    - what if
+    - stop
+    - truth
+    - nobody
+    - everyone
+    - finally
+    - number one
+  weights:
+    speech_density: 1.0
+    keywords: 0.8
+    hook: 1.0
+    completeness: 0.6
+    filler: 0.5
+    silence: 0.5
+
+render:
+  width: 1080
+  height: 1920
+  fps: 30
+  # blur_pad = vertical video on a blurred copy of itself (keeps the full frame)
+  # center   = crop to the middle of the frame (loses the sides)
+  crop_mode: blur_pad
+  preset: veryfast
+  crf: 21
+  audio_bitrate: 128k
+
+captions:
+  enabled: true
+  font: Arial
+  font_size: 72
+  max_words_per_line: 4
+  margin_v: 380
+  outline: 4
+  bold: true
