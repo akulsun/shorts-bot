@@ -1,0 +1,43 @@
+# --- Python ---
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- App data (never commit media) ---
+/output/
+/downloads/
+/temp/
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.mp3
+*.wav
+*.m4a
+*.aac
+*.flac
+*.srt
+*.vtt
+*.ass
+
+# --- Model caches ---
+models/
+whisper-cache/
+.cache/
+.huggingface/
+*.onnx
+*.ct2
+
+# --- Secrets ---
+.env
+.env.*
+*.key
+*.pem
+secrets.yaml
+secrets.yml
+cookies.txt
