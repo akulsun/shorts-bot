@@ -141,20 +141,21 @@ def probe(path: Path) -> MediaInfo:
 
     streams = data.get("streams", [])
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
-    if video is None:
-        raise FFmpegError(f"{path} contains no video stream")
+    has_audio = any(s.get("codec_type") == "audio" for s in streams)
+    if video is None and not has_audio:
+        raise FFmpegError(f"{path} contains no audio or video streams")
 
     duration = _first_float(
         data.get("format", {}).get("duration"),
-        video.get("duration"),
+        video.get("duration") if video else None,
         default=0.0,
     )
     return MediaInfo(
         duration=duration,
-        width=int(video.get("width") or 0),
-        height=int(video.get("height") or 0),
-        fps=_parse_rate(video.get("r_frame_rate")),
-        has_audio=any(s.get("codec_type") == "audio" for s in streams),
+        width=int(video.get("width") or 0) if video else 0,
+        height=int(video.get("height") or 0) if video else 0,
+        fps=_parse_rate(video.get("r_frame_rate")) if video else 0.0,
+        has_audio=has_audio,
     )
 
 

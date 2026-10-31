@@ -11,10 +11,12 @@ import logging
 import sys
 from pathlib import Path
 
-from . import checks
+from . import audio, checks, download
 from .config import Config, ensure_directories, load_config
 from .errors import ShortsBotError
+from .formatting import format_duration, format_size
 from .logging_setup import setup_logging
+from .state import State
 
 log = logging.getLogger("shortsbot")
 
@@ -50,6 +52,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="also load whisper and transcribe 3 s of generated audio",
     )
     check_env.set_defaults(func=_cmd_check_env)
+
+    download_cmd = subparsers.add_parser(
+        "download",
+        help="fetch a YouTube video or read a local file, then extract audio",
+    )
+    download_cmd.add_argument(
+        "source", help="YouTube URL or path to a local video file"
+    )
+    download_cmd.add_argument(
+        "--force",
+        action="store_true",
+        help="ignore cached results and fetch/extract again",
+    )
+    download_cmd.set_defaults(func=_cmd_download)
 
     return parser
 
@@ -93,3 +109,31 @@ def main(argv: list[str] | None = None) -> int:
 
 def _cmd_check_env(args: argparse.Namespace, cfg: Config) -> int:
     return 0 if checks.run_checks(cfg, smoke_whisper=args.smoke_whisper) else 1
+
+
+def _cmd_download(args: argparse.Namespace, cfg: Config) -> int:
+    state = State.for_source(cfg, args.source)
+    source = download.resolve_source(cfg, state, force=args.force)
+    audio_path = audio.extract_audio(state, source, force=args.force)
+
+    origin = "local file" if source.is_local else "YouTube"
+    print()
+    print(source.title)
+    print(f"  video id  {state.video_id}")
+    print(
+        f"  source    {_display_path(source.path, cfg)} "
+        f"({origin}, {source.width}x{source.height}, {format_duration(source.duration)})"
+    )
+    print(
+        f"  audio     {_display_path(audio_path, cfg)} "
+        f"({format_size(audio_path.stat().st_size)}, 16 kHz mono)"
+    )
+    print(f"  workdir   {_display_path(state.workdir, cfg)}")
+    return 0
+
+
+def _display_path(path: Path, cfg: Config) -> str:
+    try:
+        return str(path.relative_to(cfg.root))
+    except ValueError:
+        return str(path)

@@ -21,5 +21,9 @@ class FFmpegError(ShortsBotError):
     """An ffmpeg/ffprobe invocation failed."""
 
 
+class DownloadError(ShortsBotError):
+    """The source video could not be obtained or read."""
+
+
 class StageError(ShortsBotError):
     """A pipeline stage cannot run yet, or its cached output is unusable."""
