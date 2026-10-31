@@ -343,7 +343,13 @@ _HINT_RULES: tuple[tuple[tuple[str, ...], str, str], ...] = (
         "set download.cookies_from_browser in config.yaml, and update yt-dlp",
     ),
     (
-        ("video unavailable", "this video is unavailable", "has been removed", "does not exist"),
+        (
+            "video unavailable",
+            "video is unavailable",
+            "video is not available",
+            "video has been removed",
+            "does not exist",
+        ),
         "the video is unavailable",
         "check the URL, or try another video",
     ),

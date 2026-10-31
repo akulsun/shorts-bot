@@ -5,7 +5,7 @@ All timestamps are seconds (float) from the start of the source video.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -119,6 +119,7 @@ class Clip:
     score: float
     text: str
     reason: str = ""
+    components: dict[str, float] = field(default_factory=dict)
 
     @property
     def duration(self) -> float:
@@ -132,6 +133,7 @@ class Clip:
             "score": round(self.score, 4),
             "text": self.text,
             "reason": self.reason,
+            "components": {key: round(value, 4) for key, value in self.components.items()},
         }
 
     @classmethod
@@ -143,4 +145,8 @@ class Clip:
             score=float(data.get("score", 0.0)),
             text=str(data.get("text", "")),
             reason=str(data.get("reason", "")),
+            components={
+                str(key): float(value)
+                for key, value in (data.get("components") or {}).items()
+            },
         )

@@ -9,13 +9,16 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import textwrap
+from dataclasses import replace
 from pathlib import Path
 
-from . import audio, checks, download, transcribe
+from . import audio, checks, download, jsonio, transcribe
 from .config import Config, ensure_directories, load_config
-from .errors import ShortsBotError
+from .errors import ConfigError, ShortsBotError
 from .formatting import format_duration, format_size
 from .logging_setup import setup_logging
+from .selectors import CLIPS_FILENAME, load_selector
 from .state import State
 
 log = logging.getLogger("shortsbot")
@@ -87,6 +90,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="ignore the cached transcript and transcribe again",
     )
     transcribe_cmd.set_defaults(func=_cmd_transcribe)
+
+    select_cmd = subparsers.add_parser(
+        "select",
+        help="pick the best clips from the transcript",
+    )
+    select_cmd.add_argument(
+        "video_id", help="video id printed by the download stage"
+    )
+    select_cmd.add_argument(
+        "--top",
+        type=int,
+        default=None,
+        metavar="N",
+        help="number of clips to keep (default: selection.max_clips)",
+    )
+    select_cmd.set_defaults(func=_cmd_select)
 
     return parser
 
@@ -190,6 +209,98 @@ def _cmd_transcribe(args: argparse.Namespace, cfg: Config) -> int:
         )
         print(f"        {segment.text}")
     return 0
+
+
+def _cmd_select(args: argparse.Namespace, cfg: Config) -> int:
+    if args.top is not None and args.top < 1:
+        raise ConfigError("--top must be at least 1")
+
+    state = State.load(cfg, args.video_id)
+    state.require("transcribe")
+    transcript = transcribe.load_transcript(state)
+
+    selection = cfg.selection
+    if args.top is not None:
+        selection = replace(selection, max_clips=args.top)
+
+    outcome = load_selector(selection.selector).select(transcript, selection)
+
+    clips_path = state.workdir / CLIPS_FILENAME
+    jsonio.write_json(
+        clips_path,
+        {
+            "selector": selection.selector,
+            "settings": {
+                "min_seconds": selection.min_seconds,
+                "max_seconds": selection.max_seconds,
+                "max_clips": selection.max_clips,
+            },
+            "reason": outcome.reason,
+            "clips": [clip.to_dict() for clip in outcome.clips],
+        },
+    )
+    state.mark_done(
+        "select",
+        path=str(clips_path),
+        clips=len(outcome.clips),
+        selector=selection.selector,
+    )
+
+    _print_clips(state, outcome, selection, clips_path, cfg)
+    return 0
+
+
+def _print_clips(
+    state: State,
+    outcome,
+    selection,
+    clips_path: Path,
+    cfg: Config,
+) -> None:
+    info = state.get("source_info") or {}
+    title = str(info.get("title") or state.video_id)
+
+    print()
+    print(title)
+    print(
+        f"  selector  {selection.selector}  "
+        f"({selection.min_seconds:.0f}-{selection.max_seconds:.0f}s, "
+        f"up to {selection.max_clips})"
+    )
+    print(f"  file      {_display_path(clips_path, cfg)}")
+    print(f"  found     {len(outcome.clips)} clip(s)")
+
+    if not outcome.clips:
+        print()
+        print(f"No clips were selected: {outcome.reason}.")
+        print(
+            "Hint: lower selection.min_seconds in config.yaml, "
+            "or use a longer video."
+        )
+        return
+
+    print()
+    print("  score = weighted sum of the components (best first)")
+    for clip in outcome.clips:
+        print()
+        print(
+            f"  #{clip.index}  "
+            f"[{_fmt_timestamp(clip.start)} -> {_fmt_timestamp(clip.end)}]  "
+            f"{clip.duration:.1f}s  score {clip.score:.2f}"
+        )
+        items = [f"{key} {value:+.2f}" for key, value in clip.components.items()]
+        for start in range(0, len(items), 3):
+            print("      " + "   ".join(items[start:start + 3]))
+        if clip.reason:
+            print(f"      reason: {clip.reason}")
+        print(
+            textwrap.fill(
+                clip.text,
+                width=96,
+                initial_indent="      ",
+                subsequent_indent="      ",
+            )
+        )
 
 
 def _fmt_timestamp(seconds: float) -> str:

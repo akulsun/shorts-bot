@@ -76,6 +76,20 @@ def transcribe(cfg: Config, state: State, *, force: bool = False) -> Transcript:
     return transcript
 
 
+def load_transcript(state: State) -> Transcript:
+    """Read the cached transcript for this work folder."""
+    path = state.workdir / TRANSCRIPT_FILENAME
+    if not path.exists():
+        raise StageError(
+            f"transcript file is missing: {path}\n"
+            f"Run: python main.py transcribe {state.video_id}"
+        )
+    try:
+        return Transcript.from_dict(jsonio.read_json(path))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise StageError(f"transcript file is unreadable: {path} ({exc})") from exc
+
+
 # --------------------------------------------------------------------------- #
 # Cache
 # --------------------------------------------------------------------------- #
