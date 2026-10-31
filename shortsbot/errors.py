@@ -25,5 +25,9 @@ class DownloadError(ShortsBotError):
     """The source video could not be obtained or read."""
 
 
+class TranscriptionError(ShortsBotError):
+    """Whisper could not be loaded or the audio could not be transcribed."""
+
+
 class StageError(ShortsBotError):
     """A pipeline stage cannot run yet, or its cached output is unusable."""

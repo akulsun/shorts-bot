@@ -11,7 +11,7 @@ import logging
 import sys
 from pathlib import Path
 
-from . import audio, checks, download
+from . import audio, checks, download, transcribe
 from .config import Config, ensure_directories, load_config
 from .errors import ShortsBotError
 from .formatting import format_duration, format_size
@@ -66,6 +66,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="ignore cached results and fetch/extract again",
     )
     download_cmd.set_defaults(func=_cmd_download)
+
+    transcribe_cmd = subparsers.add_parser(
+        "transcribe",
+        help="transcribe the audio with word-level timestamps",
+    )
+    transcribe_cmd.add_argument(
+        "video_id", help="video id printed by the download stage"
+    )
+    transcribe_cmd.add_argument(
+        "--preview",
+        type=int,
+        default=3,
+        metavar="N",
+        help="show the first N segments (default: 3)",
+    )
+    transcribe_cmd.add_argument(
+        "--force",
+        action="store_true",
+        help="ignore the cached transcript and transcribe again",
+    )
+    transcribe_cmd.set_defaults(func=_cmd_transcribe)
 
     return parser
 
@@ -130,6 +151,50 @@ def _cmd_download(args: argparse.Namespace, cfg: Config) -> int:
     )
     print(f"  workdir   {_display_path(state.workdir, cfg)}")
     return 0
+
+
+def _cmd_transcribe(args: argparse.Namespace, cfg: Config) -> int:
+    state = State.load(cfg, args.video_id)
+    transcript = transcribe.transcribe(cfg, state, force=args.force)
+
+    info = state.get("source_info") or {}
+    title = str(info.get("title") or state.video_id)
+    word_count = sum(len(segment.words) for segment in transcript.segments)
+
+    print()
+    print(title)
+    print(f"  language  {transcript.language or 'unknown'}")
+    print(f"  duration  {format_duration(transcript.duration)}")
+    print(f"  segments  {len(transcript.segments)}")
+    print(f"  words     {word_count}")
+    print(
+        f"  file      "
+        f"{_display_path(state.workdir / transcribe.TRANSCRIPT_FILENAME, cfg)}"
+    )
+
+    if args.preview <= 0:
+        return 0
+    if not transcript.segments:
+        print()
+        print("No speech was detected in the audio.")
+        return 0
+
+    shown = transcript.segments[: args.preview]
+    print()
+    print(f"Preview (first {len(shown)} of {len(transcript.segments)} segments):")
+    for segment in shown:
+        print(
+            f"  #{segment.id:<3} "
+            f"[{_fmt_timestamp(segment.start)} -> {_fmt_timestamp(segment.end)}]  "
+            f"{segment.duration:.1f}s  {len(segment.words)} words"
+        )
+        print(f"        {segment.text}")
+    return 0
+
+
+def _fmt_timestamp(seconds: float) -> str:
+    minutes, secs = divmod(max(0.0, seconds), 60)
+    return f"{int(minutes):02d}:{secs:06.3f}"
 
 
 def _display_path(path: Path, cfg: Config) -> str:

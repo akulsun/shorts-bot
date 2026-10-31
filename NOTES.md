@@ -38,8 +38,7 @@ with burned-in word-level captions. Free, local, CPU-only, no paid APIs.
 
 `main.py` → `shortsbot/cli.py` subcommands. Each stage reads and writes files
 under `temp/<video_id>/` and records status in `state.json`, so any stage can
-be re-run alone. `transcript.json` and `clips.json` will be caches. Final MP4s
-go to `output/`.
+be re-run alone. Final MP4s go to `output/`.
 
 Stage subcommands are registered in `cli.py` only once their module exists, so
 the CLI never advertises something that does not work.
@@ -48,9 +47,10 @@ the CLI never advertises something that does not work.
 
 ```
 temp/<video_id>/
-  state.json     # stage status + source metadata + cached paths
-  source.mp4     # downloaded (local files are referenced, not copied)
-  audio.wav      # 16 kHz mono PCM s16le
+  state.json       # stage status + source metadata + cached paths
+  source.mp4       # downloaded (local files are referenced, not copied)
+  audio.wav        # 16 kHz mono PCM s16le
+  transcript.json  # Transcript.to_dict(): language, duration, segments[], words[]
 ```
 
 `<video_id>` = first 10 hex chars of sha1 of the normalized source
@@ -63,7 +63,7 @@ cache hit.
 |---|---|---|---|
 | 0 | Foundation: config, models, ffmpeg wrapper, state, CLI, `check-env` | `config.py`, `models.py`, `ffmpeg.py`, `state.py`, `logging_setup.py`, `checks.py`, `cli.py` | **done** |
 | 1 | Download + audio extraction | `download.py`, `audio.py`, `formatting.py` | **done** |
-| 2 | Transcribe (faster-whisper) | `transcribe.py` | **todo** |
+| 2 | Transcribe (faster-whisper, word-level) | `transcribe.py`, `jsonio.py` | **done** |
 | 3 | Clip selection | `selectors/base.py`, `selectors/heuristic.py` | **todo** |
 | 4 | Render (cut + 9:16 + captions) | `captions.py`, `render.py` | **todo** |
 | 5 | Batch / end-to-end | `pipeline.py` | **todo** |
@@ -76,22 +76,26 @@ venv\Scripts\python.exe main.py check-env --smoke-whisper
 venv\Scripts\python.exe main.py download "<youtube-url>"
 venv\Scripts\python.exe main.py download "path\to\local.mp4"
 venv\Scripts\python.exe main.py download "<url-or-path>" --force
+venv\Scripts\python.exe main.py transcribe <video_id> --preview 3
+venv\Scripts\python.exe main.py transcribe <video_id> --force
 ```
 
-`download` prints the `video_id` needed by the next stage, e.g.:
+`download` prints the `video_id` the next stage needs. `transcribe` prints a
+summary plus the first N segments (number of segments, words, timestamps) and
+logs throughput:
 
 ```
-Me at the zoo
-  video id  14fc847748
-  source    temp\14fc847748\source.mp4 (YouTube, 320x240, 0:19)
-  audio     temp\14fc847748\audio.wav (595.8 KB, 16 kHz mono)
-  workdir   temp\14fc847748
+INFO  loading whisper model 'base' (int8, 6 threads)
+INFO  model ready in 1.4s
+INFO  transcribing audio.wav
+INFO  transcribed 0:19 of audio in 3.0s (RTF 0.16, 6.3x realtime)
 ```
+
+RTF = processing seconds / audio seconds. Below 1.0 is faster than realtime.
 
 Planned (not built yet):
 
 ```
-python main.py transcribe <video_id> [--preview N] [--force]
 python main.py select <video_id> [--top N]
 python main.py render <video_id> --clip <index>
 python main.py run <url-or-path> [--clips N]
@@ -121,21 +125,28 @@ python main.py run <url-or-path> [--clips N]
   `_translate_error()` maps yt-dlp errors to actionable messages
   (private / unavailable / age-restricted / bot check / geo / network).
 - `audio.py` — `extract_audio(state, source, force=)` → `audio.wav`,
-  16 kHz mono PCM s16le. Verifies duration against the video and warns on a
-  large mismatch.
+  16 kHz mono PCM s16le. Verifies duration against the video.
+- `transcribe.py` — `transcribe(cfg, state, force=) -> Transcript`.
+  Loads the model lazily (keeps `--help` fast), `word_timestamps=True`,
+  `condition_on_previous_text=False` (stops hallucination loops on long
+  videos), VAD per config. Writes `transcript.json` atomically and stores a
+  cache signature (`model/compute/lang/vad`) in state: changing those settings
+  re-transcribes automatically instead of silently reusing the old model's
+  output. Model is freed with `del` + `gc.collect()` after use.
+- `jsonio.py` — `write_json()` (atomic via `.tmp` + `os.replace`),
+  `read_json()`; both raise `StageError` on failure.
 - `formatting.py` — `format_duration()` ("2:41"), `format_size()` ("12.3 MB").
 - `checks.py` — diagnostics for `check-env`; each check returns
   `(ok, detail, hint)` and never raises.
 - `errors.py` — `ShortsBotError` base; CLI prints these without a traceback.
   Subclasses: `ConfigError`, `DependencyError`, `FFmpegError`,
-  `DownloadError`, `StageError`.
+  `DownloadError`, `TranscriptionError`, `StageError`.
 
 ## Known issues / gotchas
 
 1. **No JS runtime for yt-dlp.** Every download prints a warning that YouTube
    extraction without one is deprecated and some formats may be missing.
-   Fix when it starts failing: install deno (`winget install DenoLand.Deno`)
-   and yt-dlp will pick it up automatically.
+   Fix when it starts failing: install deno (`winget install DenoLand.Deno`).
 2. **PyAV pinned to 16.1.0.** faster-whisper 1.2.1 calls
    `av.open(..., metadata_errors=...)`, removed in PyAV 17. Do not bump `av`
    past 16 until faster-whisper is updated.
@@ -148,11 +159,12 @@ python main.py run <url-or-path> [--clips N]
    `ffmpeg.escape_filter_path()` — never build this by hand.
 7. **YouTube bot checks** — keep yt-dlp updated; `download.cookies_from_browser`
    (e.g. `"chrome"`) is the escape hatch and is already wired into yt-dlp opts.
-8. **Speed** (measured, `base`/int8 on this CPU): model load 1.3 s, 3 s of
-   audio decoded in ~1.8 s.
+8. **Measured speed** on this CPU (`base`, int8, 6 threads): model load
+   ~1.0–1.4 s; 19 s of audio decoded in ~3.0 s = **RTF 0.16 (6.3x realtime)**.
+   Expect `small` to be roughly 2–3x slower than `base`.
 
 ## Next action
 
-Stage 1 is committed and awaiting the user's test. **Do not start Stage 2
-until the user confirms.** Next up: `transcribe.py` (faster-whisper, word-level
-timestamps, cached to `transcript.json`).
+Stage 2 is committed and awaiting the user's test. **Do not start Stage 3
+until the user confirms.** Next up: `selectors/base.py` (Selector protocol)
+and `selectors/heuristic.py` (scoring + non-overlap), plus `main.py select`.

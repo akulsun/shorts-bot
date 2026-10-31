@@ -77,7 +77,8 @@ class State:
             if source is None:
                 raise StageError(
                     f"no work folder for '{video_id}' in {cfg.paths.temp}. "
-                    f"Run the earlier stage first (see NOTES.md)."
+                    f"Run 'python main.py download <url-or-path>' first, "
+                    f"then use the id it prints."
                 )
             data = {
                 "version": STATE_VERSION,
