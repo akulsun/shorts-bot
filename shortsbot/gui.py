@@ -34,7 +34,12 @@ from .gui_support import (
     JobSucceeded,
     LogEvent,
     QueueLogHandler,
+    ResultRow,
+    build_results,
+    clip_file_error,
     drain_queue,
+    open_file,
+    open_folder,
     save_settings,
     validate_source,
 )
@@ -253,7 +258,7 @@ class ShortsBotApp(ctk.CTk):
         )
         self.log_box.configure(state="disabled")
 
-        # Results placeholder (full list arrives in step B) -------------- #
+        # Results -------------------------------------------------------- #
         results = ctk.CTkFrame(self)
         results.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 14))
         results.grid_columnconfigure(0, weight=1)
@@ -266,8 +271,101 @@ class ShortsBotApp(ctk.CTk):
             anchor="w",
         )
         self.results_label.grid(
-            row=1, column=0, sticky="ew", padx=12, pady=(0, 10)
+            row=1, column=0, sticky="ew", padx=12, pady=(0, 6)
         )
+        self.results_list = ctk.CTkScrollableFrame(results, height=135)
+        self.results_list.grid(
+            row=2, column=0, sticky="ew", padx=12, pady=(0, 10)
+        )
+        self.results_list.grid_columnconfigure(0, weight=1)
+
+    def _clear_results_list(self) -> None:
+        for child in self.results_list.winfo_children():
+            child.destroy()
+
+    def _populate_results_list(self, rows: tuple[ResultRow, ...]) -> None:
+        self._clear_results_list()
+        for idx, row in enumerate(rows):
+            row_frame = ctk.CTkFrame(
+                self.results_list,
+                fg_color=("gray85", "gray20"),
+            )
+            row_frame.grid(row=idx, column=0, sticky="ew", padx=4, pady=3)
+            row_frame.grid_columnconfigure(0, weight=1)
+
+            title_label = ctk.CTkLabel(
+                row_frame,
+                text=row.title,
+                anchor="w",
+                font=ctk.CTkFont(weight="bold"),
+            )
+            title_label.grid(row=0, column=0, sticky="w", padx=(10, 6), pady=6)
+
+            duration_label = ctk.CTkLabel(
+                row_frame,
+                text=row.duration,
+                width=50,
+                anchor="e",
+                text_color=("gray40", "gray70"),
+            )
+            duration_label.grid(row=0, column=1, padx=(6, 10), pady=6)
+
+            if row.path is not None:
+                btn_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
+                btn_frame.grid(row=0, column=2, padx=(0, 10), pady=4)
+
+                open_file_btn = ctk.CTkButton(
+                    btn_frame,
+                    text="Open file",
+                    width=85,
+                    height=28,
+                    command=lambda p=row.path: self._on_open_file(p),
+                )
+                open_file_btn.grid(row=0, column=0, padx=(0, 6), pady=2)
+
+                open_folder_btn = ctk.CTkButton(
+                    btn_frame,
+                    text="Open folder",
+                    width=95,
+                    height=28,
+                    command=lambda p=row.path: self._on_open_folder(p),
+                )
+                open_folder_btn.grid(row=0, column=1, padx=0, pady=2)
+            else:
+                error_label = ctk.CTkLabel(
+                    row_frame,
+                    text=row.error,
+                    text_color="#ff6b6b",
+                    anchor="e",
+                    justify="right",
+                )
+                error_label.grid(row=0, column=2, padx=(6, 10), pady=6)
+
+    def _on_open_file(self, path: Path) -> None:
+        err = clip_file_error(path)
+        if err:
+            self._set_error(err)
+            messagebox.showerror("File Not Found", err, parent=self)
+            return
+        try:
+            open_file(path)
+        except Exception as exc:
+            err_msg = f"Cannot open file: {exc}"
+            self._set_error(err_msg)
+            messagebox.showerror("Open File Failed", err_msg, parent=self)
+
+    def _on_open_folder(self, path: Path) -> None:
+        err = clip_file_error(path)
+        if err:
+            self._set_error(err)
+            messagebox.showerror("File Not Found", err, parent=self)
+            return
+        try:
+            open_folder(path)
+        except Exception as exc:
+            err_msg = f"Cannot open folder: {exc}"
+            self._set_error(err_msg)
+            messagebox.showerror("Open Folder Failed", err_msg, parent=self)
 
     def _model_values(self) -> list[str]:
         values = list(MODEL_SIZES)
@@ -340,10 +438,12 @@ class ShortsBotApp(ctk.CTk):
             cfg = settings.apply(self.cfg)
         except Exception as exc:  # ConfigError from validation
             self._set_error(str(exc))
+            messagebox.showerror("Shorts Bot", str(exc), parent=self)
             log.warning("cannot start: %s", exc)
             return
 
         self._set_error("")
+        self._clear_results_list()
         self._job_active = True
         self._cancel_event = threading.Event()
         self._set_running(True)
@@ -443,24 +543,31 @@ class ShortsBotApp(ctk.CTk):
             self._finish_job()
             self.progress.set(1.0)
             self.stage_label.configure(text="Done")
-            self._set_error("")
             result = event.result
-            selected = len(result.selection.outcome.clips)
-            if selected == 0:
-                reason = result.selection.outcome.reason
-                self.results_label.configure(
-                    text=(
-                        "No clips were selected"
-                        + (f": {reason}" if reason else ".")
-                    )
+            view = build_results(
+                result.clips,
+                reason=result.selection.outcome.reason,
+            )
+            self.results_label.configure(text=view.message)
+            self._populate_results_list(view.rows)
+
+            if result.failures:
+                failed_count = len(result.failures)
+                total_count = len(result.clips)
+                err_summary = (
+                    f"{failed_count} of {total_count} clip(s) failed to render."
+                    if total_count > 1
+                    else "1 clip failed to render."
+                )
+                self._set_error(err_summary)
+                messagebox.showerror(
+                    "Render Failure",
+                    f"{err_summary}\n\nSee the results list and log for details.",
+                    parent=self,
                 )
             else:
-                self.results_label.configure(
-                    text=(
-                        f"Finished: {len(result.successes)} clip(s) rendered, "
-                        f"{len(result.failures)} failed."
-                    )
-                )
+                self._set_error("")
+
             log.info(
                 "finished: %d rendered, %d failed",
                 len(result.successes),
@@ -472,12 +579,18 @@ class ShortsBotApp(ctk.CTk):
             self._finish_job()
             self.stage_label.configure(text="Failed")
             self._set_error(event.message)
+            self._clear_results_list()
+            self.results_label.configure(text="Run failed.")
+            messagebox.showerror("Shorts Bot", event.message, parent=self)
             return
 
         if isinstance(event, JobCancelled):
             self._finish_job()
             self.stage_label.configure(text="Cancelled")
             self._set_error("Cancelled.", "#f0b429")
+            self._clear_results_list()
+            self.results_label.configure(text="Run cancelled.")
+            return
 
     def _finish_job(self) -> None:
         self._job_active = False

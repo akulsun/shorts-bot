@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import queue
+import subprocess
+import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -242,7 +245,7 @@ def build_results(clips: Iterable[Any], reason: str = "") -> ResultsView:
             failed += 1
             rows.append(
                 ResultRow(
-                    title=f"Clip #{clip.index}",
+                    title=f"Clip #{clip.index + 1}",
                     duration=duration,
                     error=short_error(run.error),
                 )
@@ -262,10 +265,10 @@ def build_results(clips: Iterable[Any], reason: str = "") -> ResultsView:
 
     if failed:
         message = (
-            f"{rendered} of {len(rows)} clip(s) rendered; {failed} failed."
+            f"Finished: {rendered} of {len(rows)} clip(s) rendered; {failed} failed."
         )
     else:
-        message = f"{rendered} clip(s) rendered."
+        message = f"Finished: {rendered} clip(s) rendered."
     return ResultsView(rows=tuple(rows), message=message)
 
 
@@ -279,7 +282,7 @@ def short_error(message: str, limit: int = 160) -> str:
     return text[: max(0, limit - 3)].rstrip() + "..."
 
 
-def clip_file_error(path: Path) -> str:
+def clip_file_error(path: Path | str) -> str:
     """Return an empty string when a clip can be opened, else an explanation."""
     path = Path(path)
     if path.is_file():
@@ -287,6 +290,40 @@ def clip_file_error(path: Path) -> str:
     if path.exists():
         return f"The clip path is not a file:\n{path}"
     return f"The clip file no longer exists:\n{path}"
+
+
+def open_file(path: Path | str) -> None:
+    """Open a file with the operating system's default viewer."""
+    target = Path(path).resolve()
+    if sys.platform == "win32":
+        os.startfile(str(target))
+    elif sys.platform == "darwin":
+        subprocess.run(["open", str(target)], check=False)
+    else:
+        subprocess.run(["xdg-open", str(target)], check=False)
+
+
+def open_folder(path: Path | str) -> None:
+    """Open the folder containing the file, selecting the file on Windows if possible."""
+    target = Path(path).resolve()
+    if sys.platform == "win32":
+        try:
+            # explorer /select,<path> opens Explorer with the file highlighted.
+            # explorer.exe returns exit code 1 even on normal launch, so Popen without check.
+            subprocess.Popen(["explorer", f"/select,{target}"])
+            return
+        except Exception:
+            os.startfile(str(target.parent))
+            return
+    if sys.platform == "darwin":
+        subprocess.run(["open", "-R", str(target)], check=False)
+        return
+
+    folder = target.parent
+    if hasattr(os, "startfile"):
+        os.startfile(str(folder))
+    else:
+        subprocess.run(["xdg-open", str(folder)], check=False)
 
 
 def _whole_number(value: str, label: str) -> int:

@@ -112,8 +112,11 @@ stops within a couple of seconds; transcription can take up to one decoded
 segment. Closing the window during a job asks for confirmation and waits for
 the worker to stop.
 
-This first GUI step shows a one-line result summary; the full per-clip results
-list is next.
+When processing finishes, the **Results** section displays a list of clips with
+their filename, duration, and **Open file** and **Open folder** buttons (selecting
+the file in Explorer on Windows). If a clip failed to render, a concise error is
+shown instead of action buttons. Runs that select 0 clips clearly display the
+reason (e.g. video shorter than the minimum clip length).
 
 ## Configuration
 

@@ -81,7 +81,7 @@ cache hit.
 | 3 | Clip selection | `selectors/base.py`, `selectors/heuristic.py`, `selectors/__init__.py` | **done** |
 | 4 | Render (cut + 9:16 + captions) | `captions.py`, `render.py` | **done** |
 | 5 | Batch / end-to-end | `pipeline.py`, `selection.py` | **done** |
-| 6 | Desktop GUI | `gui.py`, `shortsbot/gui.py`, `shortsbot/gui_support.py` | **in progress — step A done** |
+| 6 | Desktop GUI | `gui.py`, `shortsbot/gui.py`, `shortsbot/gui_support.py` | **done (step A + B)** |
 
 ## Run commands
 
@@ -239,6 +239,41 @@ and closing the window mid-render confirmed the prompt, cancelled the job, and
 shut down in about 1.4 s.
 The GUI-specific suite has 11 display-free tests (`tests/test_gui_support.py`),
 and the full suite is now 37 tests.
+
+## Stage 6 — desktop results and error handling (step B done)
+
+Step B completes the desktop app results and error presentation:
+
+- `shortsbot/gui_support.py`:
+  - `ResultRow(title, duration, path, error)`: encapsulates display data for one clip.
+  - `ResultsView(rows, message)`: contains rows and the overall outcome message.
+  - `build_results(clips, reason)`: converts pipeline `ClipRun`s into display rows.
+    Successful renders show output filename and duration; failed renders display
+    `Clip #{index + 1}`, duration, and collapsed `short_error`. Empty selections
+    display the selector reason without error styling.
+  - `short_error(msg, limit=160)`: normalises whitespace and truncates with ellipsis.
+  - `clip_file_error(path)`: checks if the clip file still exists and is a file.
+  - `open_file(path)` and `open_folder(path)`: platform-agnostic file and folder
+    openers (`explorer /select,<path>` on Windows to highlight the file in Explorer).
+- `shortsbot/gui.py`:
+  - Replaces placeholder label with a scrollable results list (`CTkScrollableFrame`).
+  - Completed clips show filename, duration, and "Open file" & "Open folder" buttons.
+  - Clicking "Open file" or "Open folder" when the file was deleted or moved shows a
+    visible in-window error on `error_label` plus a `File Not Found` message box.
+  - Failed clips show a concise red error label in place of buttons.
+  - A run with render failures sets the in-window error and triggers a single summary
+    error dialog (`messagebox.showerror`), while per-clip details remain in the results list.
+  - Empty source and nonexistent local file on Start show visible in-window errors
+    plus a `messagebox.showerror`.
+  - Bad or unavailable URLs (`JobFailed`) show in-window error plus `messagebox.showerror`.
+  - Empty selection outcomes cleanly display the explanation in the results header
+    without triggering error dialogs.
+  - Starting a new job or cancelling clears previous result rows.
+- `tests/test_gui_support.py`:
+  - 8 new display-free unit tests covering `build_results` (all succeeded, mixed,
+    all failed, empty with/without reason), `short_error`, `clip_file_error`, and
+    `open_file` / `open_folder` OS plumbing without importing CustomTkinter.
+  - Total test suite now stands at 45 tests.
 
 ## Module notes (for the next session)
 
@@ -458,8 +493,8 @@ and the full suite is now 37 tests.
 
 ## Next action
 
-Stage 6 step A (window, settings, background job) is committed and awaiting the
-user's manual test. Do not start step B until the user confirms.
+Stage 6 step B (results list, action buttons, in-window errors and dialogs) is
+implemented and awaiting user manual test.
 
 Requested checks:
 
@@ -468,15 +503,19 @@ venv\Scripts\python.exe -m unittest discover -s tests -v
 venv\Scripts\python.exe gui.py
 ```
 
-Expected: 37 tests pass. The window opens with the current config values; Save
-updates `config.yaml`; an invalid Save shows an error and leaves the file
-unchanged; a cached run of `temp\_loop_test.mp4` reaches `Done` with
-`Finished: 3 clip(s) rendered, 0 failed.`; Cancel during a render logs
-`Cancelling... waiting for the current step to reach a safe point` and ends at
-`Cancelled`; closing during a job asks first and only closes after the worker
-stops.
+Expected:
+1. 45 unit tests pass.
+2. Clicking "Start" with an empty source shows in-window error and "Shorts Bot" error dialog.
+3. Entering a nonexistent local path shows in-window error and "Shorts Bot" error dialog.
+4. Running a valid source (e.g. `temp\_loop_test.mp4`) renders clips and displays each in
+   the Results list with filename, duration, and "Open file" / "Open folder" buttons.
+5. "Open file" opens the clip in the default media player; "Open folder" selects the file
+   in Windows Explorer.
+6. If a rendered clip is deleted and "Open file" or "Open folder" is clicked, an in-window
+   error and a "File Not Found" dialog appear.
+7. A run that produces 0 clips displays the explanation without error dialogs.
 
-After confirmation, build step B (per-clip results, error details, opening the
-output folder). Still open: run one real long YouTube video end-to-end, flip
-`transcription.model_size` from `base` to `small`, and consider an LLM selector
-behind `selectors/base.py`.
+After confirmation: proceed with the separate `downloads/` cleanup commit (removing
+unused `downloads/` references and ensuring legacy `config.yaml` with `downloads` loads
+safely with a warning). Still open: flip `transcription.model_size` to `small`, and consider
+an LLM selector behind `selectors/base.py`.
