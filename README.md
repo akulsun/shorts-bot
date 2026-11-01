@@ -1,152 +1,221 @@
 # Shorts Bot
 
-Turn a long video into vertical **1080x1920** YouTube Shorts with burned-in
-word-level captions. Fully local, CPU-only, no paid APIs.
+Turn long videos into vertical **1080x1920** YouTube Shorts with burned-in word-level captions. Fully local, CPU-friendly, and free with no paid APIs.
 
-The pipeline is: **download → transcribe → select → render**.
+The pipeline executes four coordinated stages: **download → transcribe → select → render**.
+
+---
+
+## Features
+
+- **Local & Private:** Everything runs locally on your CPU. No API keys, cloud accounts, or usage fees required.
+- **Flexible Input:** Accepts YouTube URLs or local video files (`.mp4`, `.mov`, `.mkv`, etc.).
+- **Word-Level Captions:** High-precision subtitle generation via `faster-whisper` (CTranslate2, int8 quantized).
+- **Heuristic Clip Selection:** Automatically detects hook sentences, keyword density, speech rate, and natural speech pauses to score and pick the best 20–60 second clips.
+- **One-Pass Vertical Rendering:** Cuts, aspect-converts (blurred padding or center crop), and burns formatted `.ass` subtitles in a single FFmpeg encode pass.
+- **Smart Caching:** Work folders under `temp/<video_id>/` cache each stage; re-running reuses completed work without re-downloading or re-transcribing.
+- **Desktop GUI & CLI:** Use either the command-line interface or the modern CustomTkinter desktop window.
+- **Cooperative Cancellation & Safe Cleanup:** Cancel jobs mid-run cleanly without orphaned ffmpeg processes or corrupted files.
+
+---
 
 ## Requirements
 
-- Windows (tested on Windows 10/11) or Linux/macOS with equivalent tools
-- Python **3.10+** (tested with 3.14.8)
-- `ffmpeg` and `ffprobe` on `PATH` (a build with `libx264`, `aac`, and the
-  `ass` filter)
-- ~1–2 GB free disk for the whisper model and temporary files
-- No GPU required
-- The desktop app uses `customtkinter==6.0.0`, already included in
-  `requirements.txt`
+- **Operating System:** Windows 10/11 (tested), Linux, or macOS.
+- **Python:** Python **3.10+** (tested up to Python 3.14).
+- **FFmpeg & FFprobe:** Must be installed and available on system `PATH`.
+  - Must include `libx264`, `aac`, and the `ass` subtitle filter.
+  - **Windows Installation:**
+    - Via winget: `winget install Gyan.FFmpeg`
+    - Via Chocolatey: `choco install ffmpeg-full`
+    - Or download a release from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) and add its `bin` folder to your system `PATH`.
+- **Disk Space:** ~1–2 GB free disk space for temporary files and the whisper model.
 
-## Setup
+---
 
-From the project folder:
+## Installation
 
+1. Clone this repository:
+   ```bash
+   git clone <repository-url>
+   cd shorts-bot
+   ```
+
+2. Create and activate a virtual environment:
+   - **Windows:**
+     ```cmd
+     python -m venv venv
+     venv\Scripts\activate
+     ```
+   - **Linux / macOS:**
+     ```bash
+     python3 -m venv venv
+     source venv/bin/activate
+     ```
+
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Verify your environment:
+   ```bash
+   python main.py check-env
+   ```
+   To also download and test the Whisper model on a brief synthetic audio sample:
+   ```bash
+   python main.py check-env --smoke-whisper
+   ```
+
+---
+
+## Usage
+
+### 1. Desktop GUI
+
+Launch the desktop interface:
+```bash
+python gui.py
 ```
-python -m venv venv
-venv\Scripts\python.exe -m pip install -r requirements.txt
-venv\Scripts\python.exe main.py check-env
-```
+*(or `python main.py gui`)*
 
-If `check-env` reports a missing component, install it and run the command
-again. To also download and test the whisper model:
+- Enter a YouTube URL or click **Browse...** to pick a local video file.
+- Adjust settings (number of clips, Whisper model, crop mode, min/max duration).
+- Click **Start** to run the complete pipeline with live progress and logs.
+- Click **Cancel** to safely stop execution at the next safe boundary.
+- Once finished, view output clips in the **Results** panel with one-click buttons to play the video or reveal it in File Explorer.
 
-```
-venv\Scripts\python.exe main.py check-env --smoke-whisper
-```
+### 2. One-Command CLI Pipeline
 
-The first transcription downloads the model (`base` ≈ 145 MB, `small` ≈ 460 MB)
-into `%USERPROFILE%\.cache\huggingface`.
-
-## Run everything in one command
-
-```
-venv\Scripts\python.exe main.py run "<youtube-url-or-local-path>" --clips 3
-```
-
-This runs all four stages and prints a progress line per stage plus a summary
-of every output file and its duration. Finished MP4s go to `output/`.
-
-Re-running the same source reuses the cached download, transcript, and
-already-rendered clips, so an interrupted or partly failed run continues where
-it stopped. If one clip fails to render, the error is logged and the remaining
-clips still render; the command exits with a non-zero code.
-
-By default temporary source video and audio are kept. Add `--clean` to delete
-them after a **fully successful** run (default: `--keep-temp`):
-
-```
-venv\Scripts\python.exe main.py run "<url-or-path>" --clips 3 --clean
-```
-
-`--clean` only removes files the app downloaded itself (or extracted audio)
-inside the working / downloads directory. A local input file you passed in or
-anything in `output/` is never touched. If any clip fails to render or the run
-is cancelled, files are kept so re-runs do not need to re-download.
-
-## Run stages individually
-
-`download` prints the `video_id` used by the later commands:
-
-```
-venv\Scripts\python.exe main.py download "<youtube-url>"
-venv\Scripts\python.exe main.py download "path\to\local.mp4"
-venv\Scripts\python.exe main.py transcribe <video_id> --preview 3
-venv\Scripts\python.exe main.py select <video_id> --top 3
-venv\Scripts\python.exe main.py render <video_id> --clip 0
-```
-
-Useful variants:
-
-```
-... download "<url-or-path>" --force      # re-download / re-extract audio
-... transcribe <video_id> --force         # ignore the cached transcript
-... transcribe <video_id> --preview 0     # skip the preview
-... run "<url-or-path>" --clips 1         # one clip instead of config
-... run "<url-or-path>" --keep-temp       # explicit default
+Run all stages (download, transcribe, select, render) in a single command:
+```bash
+python main.py run "<youtube-url-or-local-path>" --clips 3
 ```
 
-## Desktop app
+Finished vertical videos are saved to `output/`.
 
-Start the window from the project folder:
+#### Useful Flags:
+- `--clean`: Deletes downloaded source media and intermediate WAV audio after a fully successful run (default is `--keep-temp`). Local files passed by the user are never deleted.
+- `--force`: Ignores cached downloads or transcripts and re-runs from scratch.
+- `-v` / `-vv`: Increases log verbosity for troubleshooting.
 
+### 3. Individual Stage Commands
+
+You can run individual stages independently using the printed 10-character `video_id`:
+```bash
+# Stage 1: Download or inspect local video and extract 16 kHz audio
+python main.py download "https://youtube.com/watch?v=..."
+
+# Stage 2: Transcribe audio to word-level timestamps (prints segment preview)
+python main.py transcribe <video_id> --preview 3
+
+# Stage 3: Pick top candidate clips based on heuristic score
+python main.py select <video_id> --top 3
+
+# Stage 4: Render a specific clip (rank index: 0 is the highest scored clip)
+python main.py render <video_id> --clip 0
 ```
-venv\Scripts\python.exe gui.py
-```
 
-or through the CLI:
-
-```
-venv\Scripts\python.exe main.py gui
-```
-
-Paste a YouTube URL or choose a local file, adjust the five settings, and click
-**Start**. The log panel mirrors the normal pipeline log, and the progress bar
-covers download, transcription, selection, and rendering. Start and the
-settings fields are disabled while a job runs.
-
-**Save settings** writes Clips, Whisper model, Crop, Min seconds, and Max
-seconds to `config.yaml`. Values are validated first; if anything is wrong, the
-app shows the error and leaves `config.yaml` untouched. Unsaved form values
-still apply to the next run started from the window.
-
-**Cancel** asks the pipeline to stop at its next safe point and logs
-`Cancelling... waiting for the current step to reach a safe point`. A render
-stops within a couple of seconds; transcription can take up to one decoded
-segment. Closing the window during a job asks for confirmation and waits for
-the worker to stop.
-
-When processing finishes, the **Results** section displays a list of clips with
-their filename, duration, and **Open file** and **Open folder** buttons (selecting
-the file in Explorer on Windows). If a clip failed to render, a concise error is
-shown instead of action buttons. Runs that select 0 clips clearly display the
-reason (e.g. video shorter than the minimum clip length).
+---
 
 ## Configuration
 
-Edit `config.yaml`; all tunables live there and unknown keys fail loudly.
+All tunables live in [`config.yaml`](file:///c:/Users/Akul/Desktop/shorts-bot/config.yaml):
 
-| Section | Keys that matter most |
-|---|---|
-| `transcription` | `model_size` (`base`, `small`, …), `compute_type`, `cpu_threads`, `language`, `vad_filter` |
-| `selection` | `min_seconds` / `max_seconds` (20–60), `max_clips`, `keywords`, `weights`, `selector` |
-| `render` | `crop_mode` (`blur_pad` keeps the whole frame; `center` crops), `width`, `height`, `fps`, `preset`, `crf`, `audio_bitrate` |
-| `captions` | `enabled`, `font`, `font_size`, `max_words_per_line` (2–4 recommended), `margin_v`, `outline`, `bold` |
-| `paths` | `temp` (working files), `output` (final MP4s) |
+| Section | Key | Default | Description |
+|---|---|---|---|
+| `transcription` | `model_size` | `base` | Whisper model (`tiny`, `base`, `small`, `medium`, `large-v3`). `base` is fast for testing; `small` is recommended for production quality. |
+| `transcription` | `compute_type` | `int8` | Quantization type for CPU execution (`int8`, `float32`). |
+| `transcription` | `cpu_threads` | `6` | Number of worker threads for transcription inference. |
+| `transcription` | `vad_filter` | `true` | Silero Voice Activity Detector to filter out non-speech segments. |
+| `selection` | `min_seconds` | `20` | Minimum duration for a selected clip. |
+| `selection` | `max_seconds` | `60` | Maximum duration for a selected clip. |
+| `selection` | `max_clips` | `3` | Maximum number of clips to select and produce. |
+| `selection` | `selector` | `heuristic` | Clip selection algorithm (pluggable via `shortsbot/selectors/base.py`). |
+| `selection` | `weights` | `{...}` | Relative weightings for speech density, hook sentences, keywords, filler words, and pauses. |
+| `render` | `crop_mode` | `blur_pad` | `blur_pad` keeps the full original frame overlaid on a blurred background; `center` crops into the center. |
+| `render` | `preset` | `veryfast` | x264 encoding preset (`ultrafast`, `veryfast`, `medium`, etc.). |
+| `render` | `crf` | `21` | Constant Rate Factor (quality control; lower is higher quality, range 0–51). |
+| `captions` | `enabled` | `true` | Whether to burn word-level subtitles into the final video. |
+| `captions` | `font` | `Arial` | Subtitle font name. |
+| `captions` | `font_size` | `72` | Subtitle font size. |
+| `captions` | `max_words_per_line` | `4` | Number of words displayed per subtitle chunk (2–4 recommended). |
 
-`selection.selector: heuristic` is the built-in picker. It is a swappable
-interface (`shortsbot/selectors/base.py`), so an LLM selector can be added
-later without changing the pipeline.
+---
 
-For faster iteration while testing, `transcription.model_size: base` is
-currently set; switch to `small` for better accuracy once you are happy with
-the speed.
+## Running Tests
 
-## Troubleshooting
+Shorts Bot includes a comprehensive display-free unit and regression test suite covering captions formatting, heuristic scoring, pipeline progress, cooperative cancellation, safe file cleanup, and security input validation:
 
-- **yt-dlp warns about no JavaScript runtime** — downloads still work; install
-  deno if YouTube extraction starts failing.
-- **"no clips were selected"** — the video has no speech, is shorter than
-  `selection.min_seconds`, or has no segment run within the limits. Try a
-  longer video or lower `min_seconds`.
-- **Slow transcription** — CPU-only is expected. `base` is roughly 6x realtime
-  on the reference Ryzen 4500U; `small` is about 2–3x slower.
-- More detail and measured timings: `NOTES.md`.
+```bash
+python -m unittest discover -s tests -v
+```
+
+---
+
+## Project Structure
+
+```
+shorts-bot/
+├── main.py                  # CLI entry point
+├── gui.py                   # Desktop GUI entry point
+├── config.yaml              # Runtime configuration
+├── requirements.txt         # Pinned Python dependencies
+├── LICENSE                  # MIT License
+├── README.md                # Project documentation
+├── docs/
+│   └── DEV_NOTES.md         # Architecture, design decisions, and Windows quirks
+├── shortsbot/
+│   ├── __init__.py
+│   ├── audio.py             # Audio extraction (16 kHz mono WAV)
+│   ├── captions.py          # ASS subtitle format generator
+│   ├── checks.py            # Environment diagnostics (check-env)
+│   ├── cli.py               # Command-line parser & subcommands
+│   ├── config.py            # Configuration loader and validator
+│   ├── download.py          # yt-dlp wrapper & local file resolution
+│   ├── errors.py            # Custom exception classes
+│   ├── ffmpeg.py            # Process wrapper for ffmpeg & ffprobe
+│   ├── formatting.py        # String format helpers (time, size)
+│   ├── gui.py               # CustomTkinter GUI application
+│   ├── gui_support.py       # Display-free GUI logic and helpers
+│   ├── jsonio.py            # Atomic JSON read/write utilities
+│   ├── logging_setup.py     # Logging configuration
+│   ├── models.py            # Data structures (Word, Segment, Transcript, Clip)
+│   ├── pipeline.py          # End-to-end execution orchestrator
+│   ├── render.py            # FFmpeg vertical video render pipeline
+│   ├── selection.py         # Selection stage coordinator
+│   ├── state.py             # Working state persistence (temp/<id>/state.json)
+│   ├── transcribe.py        # faster-whisper transcription wrapper
+│   └── selectors/
+│       ├── __init__.py      # Selector factory & registry
+│       ├── base.py          # Selector protocol definition
+│       └── heuristic.py     # Heuristic scoring selector
+└── tests/                   # Automated unit & security test suite
+    ├── test_captions.py
+    ├── test_cleanup.py
+    ├── test_ffmpeg_cancel.py
+    ├── test_gui_support.py
+    ├── test_heuristic.py
+    ├── test_pipeline_progress.py
+    └── test_security.py
+```
+
+---
+
+## Known Limitations
+
+- **CPU-Only Processing Speed:** Transcription and video rendering run on the CPU. A 10-minute video may take 1–3 minutes to process depending on processor cores and selected Whisper model size.
+- **Heuristic Clip Selection:** The built-in selector relies on transcript density, hook patterns, and speech timing. It cannot evaluate visual aesthetics, camera angle switches, or non-verbal actions. (The pluggable `Selector` interface allows swapping in an LLM or multimodal selector).
+- **No Face Tracking / Auto-Reframing:** Center crop extracts the fixed middle 9:16 region; if the subject moves away from the center, `blur_pad` mode is recommended to preserve the full frame.
+
+---
+
+## Responsible Use
+
+Shorts Bot is an automated video editing tool created for content creators and researchers. Users must only download, transcribe, and edit content that they own, have licensed, or have explicit permission to use. This software does not grant any rights or licenses to copyrighted media, and users are solely responsible for complying with all applicable laws, copyright regulations, and platform terms of service.
+
+---
+
+## License
+
+This project is licensed under the terms of the [MIT License](LICENSE).
