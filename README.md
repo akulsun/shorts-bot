@@ -207,6 +207,12 @@ shorts-bot/
 - **CPU-Only Processing Speed:** Transcription and video rendering run on the CPU. A 10-minute video may take 1–3 minutes to process depending on processor cores and selected Whisper model size.
 - **Heuristic Clip Selection:** The built-in selector relies on transcript density, hook patterns, and speech timing. It cannot evaluate visual aesthetics, camera angle switches, or non-verbal actions. (The pluggable `Selector` interface allows swapping in an LLM or multimodal selector).
 - **No Face Tracking / Auto-Reframing:** Center crop extracts the fixed middle 9:16 region; if the subject moves away from the center, `blur_pad` mode is recommended to preserve the full frame.
+- **Input Filenames Starting with Hyphens (Finding 1.2):** Paths beginning with a leading `-` passed as arguments could be treated as command-line flags by underlying CLI tools if not formatted as absolute or `./`-prefixed paths.
+- **ASS Subtitle Font Header Escaping (Finding 2.1):** Font names specified in `captions.font` in `config.yaml` are inserted into the ASS header style definition without escaping commas or special characters; avoid commas or control characters in custom font names.
+- **Audio Bitrate Configuration Syntax (Finding 2.2):** The `render.audio_bitrate` value from `config.yaml` is passed directly to FFmpeg's `-b:a` argument without format validation; use standard FFmpeg bitrate values (e.g., `128k`, `192k`).
+- **Browser Cookie Extraction (Finding 4.2):** The `download.cookies_from_browser` setting is passed directly to `yt-dlp` without an internal browser name whitelist; specify supported browser names (such as `chrome`, `firefox`, `edge`).
+- **Configurable Clip Bounds (Finding 5.1):** `selection.max_clips` and `selection.max_seconds` in `config.yaml` are validated for minimum positive values but do not enforce arbitrary hard upper ceilings; configure realistic values for your system resources.
+- **Filesystem Path Display in GUI Errors (Finding 6.1):** When a file error occurs (such as a missing or inaccessible clip file), the GUI error popup displays the local filesystem path to assist with debugging.
 
 ---
 
