@@ -221,6 +221,14 @@ def _download_url(
     log.info("fetching %s", state.source)
     options = _ydl_options(cfg, dest, on_progress=on_progress, cancel_event=cancel_event)
     max_duration = getattr(getattr(cfg, "download", None), "max_duration", 7200.0)
+    meta_info: dict[str, Any] = {}
+    video_info: dict[str, Any] = {}
+    path: Path | None = None
+
+    max_dl_cls = getattr(getattr(yt_dlp, "utils", None), "MaxDownloadsReached", ())
+    if not (isinstance(max_dl_cls, type) and issubclass(max_dl_cls, BaseException)):
+        max_dl_cls = ()
+
     try:
         _check_cancel(cancel_event)
         with yt_dlp.YoutubeDL(options) as ydl:
@@ -228,9 +236,19 @@ def _download_url(
             meta = ydl.extract_info(state.source, download=False)
             if not isinstance(meta, dict):
                 raise DownloadError("yt-dlp returned no information for this URL")
-            if meta.get("is_live") or meta.get("live_status") == "is_live":
+            meta_info = meta
+
+            meta_item = (
+                meta["entries"][0]
+                if isinstance(meta.get("entries"), (list, tuple)) and meta["entries"]
+                else meta
+            )
+            if not isinstance(meta_item, dict):
+                meta_item = meta
+
+            if meta_item.get("is_live") or meta_item.get("live_status") == "is_live":
                 raise DownloadError("live streams are not supported")
-            duration_meta = float(meta.get("duration") or 0.0)
+            duration_meta = float(meta_item.get("duration") or 0.0)
             if duration_meta > max_duration:
                 raise DownloadError(
                     f"video duration ({format_duration(duration_meta)}) exceeds "
@@ -238,15 +256,44 @@ def _download_url(
                 )
 
             _check_cancel(cancel_event)
-            info = ydl.extract_info(state.source, download=True)
+            info = None
+            try:
+                info = ydl.extract_info(state.source, download=True)
+            except max_dl_cls:
+                # yt-dlp raises MaxDownloadsReached after completing the allowed download(s).
+                # Treat as success if the downloaded file exists.
+                info = meta
+
             if not isinstance(info, dict):
                 raise DownloadError("yt-dlp returned no information for this URL")
-            path = _final_path(ydl, info, dest)
+
+            resolved = (
+                info["entries"][0]
+                if isinstance(info.get("entries"), (list, tuple)) and info["entries"]
+                else info
+            )
+            video_info = resolved if isinstance(resolved, dict) else info
+            path = _final_path(ydl, video_info, dest)
         _check_cancel(cancel_event)
+    except max_dl_cls:
+        # Safety net: treat as success if the file was downloaded to dest
+        candidates = [
+            p
+            for p in dest.glob(f"{SOURCE_STEM}.*")
+            if p.suffix.lower() not in {".part", ".ytdl", ".temp"}
+        ]
+        if candidates:
+            path = max(candidates, key=lambda p: p.stat().st_mtime)
+            video_info = meta_item if "meta_item" in locals() and isinstance(meta_item, dict) else meta_info
+        else:
+            raise DownloadError("maximum downloads reached but no video file was found on disk")
     except yt_dlp.utils.DownloadError as exc:
         raise _translate_error(str(exc)) from exc
     except OSError as exc:
         raise DownloadError(f"cannot write to {dest}: {exc}") from exc
+
+    if path is None or not path.exists():
+        raise DownloadError("download finished but no video file was found on disk")
 
     try:
         media = probe(path)
@@ -255,18 +302,18 @@ def _download_url(
 
     if not media.has_audio:
         raise DownloadError(
-            f"'{info.get('title', path.stem)}' has no audio track, "
+            f"'{video_info.get('title', path.stem)}' has no audio track, "
             f"so there is nothing to transcribe"
         )
 
-    duration = media.duration or float(info.get("duration") or 0.0)
+    duration = media.duration or float(video_info.get("duration") or 0.0)
     if duration > max_duration:
         raise DownloadError(
             f"video duration ({format_duration(duration)}) exceeds "
             f"the maximum allowed limit of {format_duration(max_duration)}"
         )
 
-    raw_title = str(info.get("title") or path.stem)
+    raw_title = str(video_info.get("title") or path.stem)
     title = strip_ansi(raw_title) or path.stem
     log.info("downloaded '%s' (%s)", title, format_duration(media.duration))
     return SourceInfo(
@@ -301,7 +348,6 @@ def _ydl_options(
         "paths": {"home": str(dest)},
         "outtmpl": {"default": f"{SOURCE_STEM}.%(ext)s"},
         "noplaylist": True,
-        "max_downloads": 1,
         "playlist_items": "1",
         "quiet": True,
         "no_warnings": False,
@@ -328,9 +374,12 @@ def _final_path(ydl: Any, info: dict[str, Any], dest: Path) -> Path:
         if candidate and Path(candidate).exists():
             return Path(candidate)
 
-    prepared = Path(ydl.prepare_filename(info))
-    if prepared.exists():
-        return prepared
+    try:
+        prepared = Path(ydl.prepare_filename(info))
+        if prepared.exists():
+            return prepared
+    except Exception:
+        pass
 
     partial_suffixes = {".part", ".ytdl", ".temp"}
     candidates = [

@@ -29,6 +29,7 @@ The pipeline executes four coordinated stages: **download → transcribe → sel
     - Via winget: `winget install Gyan.FFmpeg`
     - Via Chocolatey: `choco install ffmpeg-full`
     - Or download a release from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) and add its `bin` folder to your system `PATH`.
+- **JavaScript Runtime (for yt-dlp):** Downloading from YouTube requires a JavaScript runtime for yt-dlp (Deno recommended: `winget install DenoLand.Deno`).
 - **Disk Space:** ~1–2 GB free disk space for temporary files and the whisper model.
 
 ---

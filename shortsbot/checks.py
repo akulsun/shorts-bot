@@ -15,7 +15,7 @@ from typing import Callable
 from . import ffmpeg
 from .config import Config
 
-CheckFn = Callable[[Config], tuple[bool, str, str]]
+CheckFn = Callable[[Config], tuple[bool | str, str, str]]
 
 
 def run_checks(cfg: Config, *, smoke_whisper: bool = False) -> bool:
@@ -26,6 +26,7 @@ def run_checks(cfg: Config, *, smoke_whisper: bool = False) -> bool:
         ("libx264 encoder", _check_encoder),
         ("ass filter", _check_ass_filter),
         ("yt-dlp", _check_ytdlp),
+        ("deno", _check_deno),
         ("faster-whisper", _check_faster_whisper),
         ("config", _check_config),
         ("working folders", _check_directories),
@@ -34,23 +35,29 @@ def run_checks(cfg: Config, *, smoke_whisper: bool = False) -> bool:
     if smoke_whisper:
         checks.append(("whisper smoke test", _check_whisper_smoke))
 
-    results: list[tuple[str, bool, str, str]] = []
+    results: list[tuple[str, str, str, str]] = []
     for label, check in checks:
         try:
-            ok, detail, hint = check(cfg)
+            status, detail, hint = check(cfg)
         except Exception as exc:  # noqa: BLE001 - diagnostics must never crash
-            ok, detail, hint = False, f"{type(exc).__name__}: {exc}", ""
-        results.append((label, ok, detail, hint))
+            status, detail, hint = False, f"{type(exc).__name__}: {exc}", ""
+        if status is True:
+            status_str = "OK  "
+        elif status is False:
+            status_str = "FAIL"
+        else:
+            status_str = f"{status:<4}"
+        results.append((label, status_str, detail, hint))
 
     width = max(len(label) for label, _, _, _ in results)
     print(f"Shorts Bot environment check ({cfg.config_path})")
     print()
-    for label, ok, detail, hint in results:
-        print(f"  {label:<{width}}  {'OK  ' if ok else 'FAIL'}  {detail}")
-        if not ok and hint:
+    for label, status_str, detail, hint in results:
+        print(f"  {label:<{width}}  {status_str}  {detail}")
+        if status_str.strip() in ("FAIL", "WARN") and hint:
             print(f"  {'':<{width}}        -> {hint}")
 
-    failed = sum(1 for _, ok, _, _ in results if not ok)
+    failed = sum(1 for _, status_str, _, _ in results if status_str.strip() == "FAIL")
     print()
     if failed:
         print(f"{failed} check(s) failed.")
@@ -105,6 +112,26 @@ def _check_ytdlp(_cfg: Config) -> tuple[bool, str, str]:
     if not version:
         version = getattr(module, "__version__", "unknown")
     return True, f"{version}", "pip install -r requirements.txt"
+
+
+def _check_deno(_cfg: Config) -> tuple[str | bool, str, str]:
+    path = shutil.which("deno")
+    if path is None:
+        return (
+            "WARN",
+            "not found on PATH",
+            "install deno for yt-dlp: winget install DenoLand.Deno",
+        )
+    version = ""
+    try:
+        import subprocess
+
+        res = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=5)
+        if res.returncode == 0:
+            version = res.stdout.splitlines()[0].strip()
+    except Exception:
+        pass
+    return True, version or "found", ""
 
 
 def _check_faster_whisper(_cfg: Config) -> tuple[bool, str, str]:
