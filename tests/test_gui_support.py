@@ -16,8 +16,6 @@ from shortsbot.gui_support import (
     GuiSettings,
     LogEvent,
     QueueLogHandler,
-    ResultRow,
-    ResultsView,
     build_results,
     clip_file_error,
     drain_queue,

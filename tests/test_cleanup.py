@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from shortsbot.config import Config, load_config
+from shortsbot.config import load_config
 from shortsbot.errors import CancelledError
 from shortsbot.pipeline import clean_downloads, run_pipeline
 from shortsbot.state import State
