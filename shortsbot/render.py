@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -33,7 +34,13 @@ class RenderResult:
     cached: bool = False
 
 
-def render_clip(cfg: Config, state: State, index: int) -> RenderResult:
+def render_clip(
+    cfg: Config,
+    state: State,
+    index: int,
+    *,
+    cancel_event: threading.Event | None = None,
+) -> RenderResult:
     """Render the selected clip ranked `index` into cfg.paths.output."""
     state.require("select")
     clips, reason = _load_clips(state)
@@ -64,6 +71,7 @@ def render_clip(cfg: Config, state: State, index: int) -> RenderResult:
                 _ffmpeg_args(cfg, source, output, clip, graph),
                 desc=f"rendering clip #{clip.index}",
                 cwd=state.workdir,
+                cancel_event=cancel_event,
             )
         except FFmpegError as exc:
             raise RenderError(f"could not render clip #{clip.index}:\n{exc}") from exc

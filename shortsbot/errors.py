@@ -35,3 +35,7 @@ class RenderError(ShortsBotError):
 
 class StageError(ShortsBotError):
     """A pipeline stage cannot run yet, or its cached output is unusable."""
+
+
+class CancelledError(ShortsBotError):
+    """A run was stopped by the user at a safe checkpoint."""

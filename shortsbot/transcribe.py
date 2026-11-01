@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import gc
 import logging
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from . import jsonio
 from .config import Config
-from .errors import StageError, TranscriptionError
+from .errors import CancelledError, StageError, TranscriptionError
 from .ffmpeg import probe
 from .formatting import format_duration
 from .models import Segment, Transcript, Word
@@ -34,9 +36,17 @@ _MODEL_MB = {
 }
 
 
-def transcribe(cfg: Config, state: State, *, force: bool = False) -> Transcript:
+def transcribe(
+    cfg: Config,
+    state: State,
+    *,
+    force: bool = False,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> Transcript:
     """Return the transcript for this work folder, running whisper if needed."""
     state.require("audio")
+    _check_cancel(cancel_event)
     audio_path = _audio_path(state)
     output = state.workdir / TRANSCRIPT_FILENAME
 
@@ -50,7 +60,14 @@ def transcribe(cfg: Config, state: State, *, force: bool = False) -> Transcript:
     try:
         model = _load_model(cfg)
         try:
-            transcript, elapsed = _decode(model, audio_path, cfg)
+            _check_cancel(cancel_event)
+            transcript, elapsed = _decode(
+                model,
+                audio_path,
+                cfg,
+                on_progress=on_progress,
+                cancel_event=cancel_event,
+            )
         finally:
             del model
             gc.collect()
@@ -183,7 +200,14 @@ def _load_model(cfg: Config):
     return model
 
 
-def _decode(model, audio_path: Path, cfg: Config) -> tuple[Transcript, float]:
+def _decode(
+    model,
+    audio_path: Path,
+    cfg: Config,
+    *,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> tuple[Transcript, float]:
     settings = cfg.transcription
     log.info("transcribing %s", audio_path.name)
 
@@ -205,8 +229,13 @@ def _decode(model, audio_path: Path, cfg: Config) -> tuple[Transcript, float]:
         marks = {"next": PROGRESS_STEP}
         segments: list[Segment] = []
         for index, raw in enumerate(segments_iter):
+            _check_cancel(cancel_event)
             segments.append(_to_segment(index, raw))
+            if on_progress is not None and total > 0:
+                on_progress(min(1.0, max(0.0, float(raw.end) / total)))
             _log_progress(float(raw.end), total, marks)
+    except CancelledError:
+        raise
     except TranscriptionError:
         raise
     except Exception as exc:
@@ -223,6 +252,11 @@ def _decode(model, audio_path: Path, cfg: Config) -> tuple[Transcript, float]:
         ),
         elapsed,
     )
+
+
+def _check_cancel(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise CancelledError("transcription cancelled")
 
 
 def _to_segment(index: int, raw) -> Segment:

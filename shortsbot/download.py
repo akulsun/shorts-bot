@@ -7,12 +7,14 @@ in temp/<video_id>/state.json, so re-running with the same input is free.
 from __future__ import annotations
 
 import logging
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .config import Config
-from .errors import DependencyError, DownloadError, FFmpegError
+from .errors import CancelledError, DependencyError, DownloadError, FFmpegError
 from .ffmpeg import probe
 from .formatting import format_duration
 from .state import State
@@ -65,8 +67,16 @@ def is_url(source: str) -> bool:
     return source.strip().lower().startswith(("http://", "https://"))
 
 
-def resolve_source(cfg: Config, state: State, *, force: bool = False) -> SourceInfo:
+def resolve_source(
+    cfg: Config,
+    state: State,
+    *,
+    force: bool = False,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> SourceInfo:
     """Return the source video for this work folder, downloading if needed."""
+    _check_cancel(cancel_event)
     source = state.source
     if not source:
         raise DownloadError(
@@ -83,12 +93,18 @@ def resolve_source(cfg: Config, state: State, *, force: bool = False) -> SourceI
     state.mark_running("download")
     try:
         if is_url(source):
-            info = _download_url(cfg, state)
+            info = _download_url(
+                cfg,
+                state,
+                on_progress=on_progress,
+                cancel_event=cancel_event,
+            )
         else:
             info = _read_local(cfg, state)
     except Exception as exc:
         state.mark_failed("download", str(exc))
         raise
+    _check_cancel(cancel_event)
 
     state.set("source_info", info.to_dict())
     state.mark_done(
@@ -169,19 +185,27 @@ def _read_local(_cfg: Config, state: State) -> SourceInfo:
 # --------------------------------------------------------------------------- #
 
 
-def _download_url(cfg: Config, state: State) -> SourceInfo:
+def _download_url(
+    cfg: Config,
+    state: State,
+    *,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> SourceInfo:
     yt_dlp = _load_ytdlp()
     dest = state.workdir
     dest.mkdir(parents=True, exist_ok=True)
 
     log.info("fetching %s", state.source)
-    options = _ydl_options(cfg, dest)
+    options = _ydl_options(cfg, dest, on_progress=on_progress, cancel_event=cancel_event)
     try:
+        _check_cancel(cancel_event)
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(state.source, download=True)
             if not isinstance(info, dict):
                 raise DownloadError("yt-dlp returned no information for this URL")
             path = _final_path(ydl, info, dest)
+        _check_cancel(cancel_event)
     except yt_dlp.utils.DownloadError as exc:
         raise _translate_error(str(exc)) from exc
     except OSError as exc:
@@ -212,7 +236,13 @@ def _download_url(cfg: Config, state: State) -> SourceInfo:
     )
 
 
-def _ydl_options(cfg: Config, dest: Path) -> dict[str, Any]:
+def _ydl_options(
+    cfg: Config,
+    dest: Path,
+    *,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> dict[str, Any]:
     max_height = cfg.download.max_height
     fmt = (
         f"bv*[height<={max_height}][ext=mp4]+ba[ext=m4a]/"
@@ -236,7 +266,7 @@ def _ydl_options(cfg: Config, dest: Path) -> dict[str, Any]:
         "fragment_retries": 3,
         "socket_timeout": 30,
         "concurrent_fragment_downloads": 1,
-        "progress_hooks": [_progress_logger()],
+        "progress_hooks": [_progress_logger(on_progress, cancel_event)],
         "logger": _YtdlLogger(),
     }
     if cfg.download.cookies_from_browser:
@@ -294,22 +324,34 @@ class _YtdlLogger:
         log.debug("yt-dlp: %s", message)
 
 
-def _progress_logger():
+def _progress_logger(
+    on_progress: Callable[[float], None] | None = None,
+    cancel_event: threading.Event | None = None,
+):
     marks = {"next": 25}
 
     def hook(status: dict[str, Any]) -> None:
+        _check_cancel(cancel_event)
         if status.get("status") != "downloading":
             return
         total = status.get("total_bytes") or status.get("total_bytes_estimate")
         downloaded = status.get("downloaded_bytes") or 0
         if not total:
             return
-        percent = downloaded * 100.0 / total
+        fraction = min(1.0, max(0.0, downloaded / total))
+        if on_progress is not None:
+            on_progress(fraction)
+        percent = fraction * 100.0
         if percent >= marks["next"]:
             log.info("downloading... %d%%", min(100, int(percent)))
             marks["next"] = int(percent) + 25
 
     return hook
+
+
+def _check_cancel(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise CancelledError("download cancelled")
 
 
 # --------------------------------------------------------------------------- #

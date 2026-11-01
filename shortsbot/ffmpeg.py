@@ -9,11 +9,13 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-from .errors import FFmpegError, DependencyError
+from .errors import CancelledError, FFmpegError, DependencyError
 
 _STDERR_TAIL_LINES = 25
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
@@ -36,20 +38,42 @@ def _run(
     timeout: float | None = None,
     nostdin: bool = False,
     cwd: Path | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [exe, "-hide_banner"]
     if nostdin:
         # ffmpeg-only: stops ffmpeg from eating console input during long jobs.
         command.append("-nostdin")
     command.extend(args)
+
+    if cancel_event is None:
+        try:
+            return subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                creationflags=_CREATE_NO_WINDOW,
+                cwd=str(cwd) if cwd is not None else None,
+            )
+        except FileNotFoundError as exc:
+            raise DependencyError(
+                f"{exe} not found on PATH (needed for: {desc}). "
+                f"Install it and make sure it is on PATH."
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise FFmpegError(f"{desc} timed out after {timeout}s") from exc
+
     try:
-        return subprocess.run(
+        process = subprocess.Popen(
             command,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=timeout,
             creationflags=_CREATE_NO_WINDOW,
             cwd=str(cwd) if cwd is not None else None,
         )
@@ -58,8 +82,43 @@ def _run(
             f"{exe} not found on PATH (needed for: {desc}). "
             f"Install it and make sure it is on PATH."
         ) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise FFmpegError(f"{desc} timed out after {timeout}s") from exc
+
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        wait = 0.2
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _stop_process(process)
+                stdout, stderr = process.communicate()
+                raise FFmpegError(f"{desc} timed out after {timeout}s")
+            wait = min(wait, remaining)
+
+        try:
+            stdout, stderr = process.communicate(timeout=wait)
+        except subprocess.TimeoutExpired:
+            if cancel_event.is_set():
+                _stop_process(process)
+                stdout, stderr = process.communicate()
+                raise CancelledError(f"{desc} cancelled")
+            continue
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def _stop_process(process: subprocess.Popen[str]) -> None:
+    """Terminate a child process, escalating to kill if it does not exit."""
+    if process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=3)
+        return
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        process.kill()
+    except OSError:
+        pass
 
 
 def _tail(text: str) -> str:
@@ -73,12 +132,16 @@ def run_ffmpeg(
     desc: str,
     timeout: float | None = None,
     cwd: Path | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> None:
     """Run ffmpeg, raising FFmpegError with the end of stderr on failure.
 
     `cwd` lets callers pass filtergraph paths relative to a folder whose name
     may contain spaces or apostrophes; those characters cannot be escaped
     reliably inside an ffmpeg filter option.
+
+    When `cancel_event` is supplied, the child process is polled and terminated
+    as soon as the event is set; CancelledError is raised instead of returning.
     """
     proc = _run(
         "ffmpeg",
@@ -87,6 +150,7 @@ def run_ffmpeg(
         timeout=timeout,
         nostdin=True,
         cwd=cwd,
+        cancel_event=cancel_event,
     )
     if proc.returncode != 0:
         raise FFmpegError(

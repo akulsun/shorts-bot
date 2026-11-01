@@ -7,6 +7,7 @@ This is the single audio contract of the pipeline: everything downstream
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 from .download import SourceInfo
@@ -21,7 +22,13 @@ AUDIO_FILENAME = "audio.wav"
 MIN_PLAUSIBLE_BYTES = 1024
 
 
-def extract_audio(state: State, source: SourceInfo, *, force: bool = False) -> Path:
+def extract_audio(
+    state: State,
+    source: SourceInfo,
+    *,
+    force: bool = False,
+    cancel_event: threading.Event | None = None,
+) -> Path:
     """Produce temp/<video_id>/audio.wav, reusing a previous result if valid."""
     output = state.workdir / AUDIO_FILENAME
 
@@ -31,7 +38,7 @@ def extract_audio(state: State, source: SourceInfo, *, force: bool = False) -> P
 
     state.mark_running("audio")
     try:
-        _run_extraction(source.path, output)
+        _run_extraction(source.path, output, cancel_event=cancel_event)
         duration = _verify(output, expected=source.duration)
     except Exception as exc:
         state.mark_failed("audio", str(exc))
@@ -65,7 +72,12 @@ def _cached_audio(state: State, output: Path) -> bool:
     return True
 
 
-def _run_extraction(video: Path, output: Path) -> None:
+def _run_extraction(
+    video: Path,
+    output: Path,
+    *,
+    cancel_event: threading.Event | None = None,
+) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     log.info("extracting audio from %s", video.name)
     run_ffmpeg(
@@ -84,6 +96,7 @@ def _run_extraction(video: Path, output: Path) -> None:
             str(output),
         ],
         desc=f"extracting audio from {video.name}",
+        cancel_event=cancel_event,
     )
 
 

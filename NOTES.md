@@ -14,6 +14,9 @@ with burned-in word-level captions. Free, local, CPU-only, no paid APIs.
 
 - Windows, Ryzen 4500U, 8 GB RAM, no GPU
 - Python **3.14.8** — works; all deps have `cp314` wheels
+- `customtkinter==6.0.0` verified on Python 3.14.8 / Tk 9.0 (window smoke
+  test passed). It is installed in `venv/` for Stage 6; `requirements.txt`
+  gets the pin in GUI step A.
 - ffmpeg 9.0.2 (gyan "essentials" build) via Chocolatey, on PATH
   - has `libx264`, `aac`, and the `ass` filter
 - venv at `venv/` (gitignored). Recreate with:
@@ -79,6 +82,7 @@ cache hit.
 | 3 | Clip selection | `selectors/base.py`, `selectors/heuristic.py`, `selectors/__init__.py` | **done** |
 | 4 | Render (cut + 9:16 + captions) | `captions.py`, `render.py` | **done** |
 | 5 | Batch / end-to-end | `pipeline.py`, `selection.py` | **done** |
+| 6 | Desktop GUI | `gui.py`, `shortsbot/gui.py`, `shortsbot/gui_support.py` | **in progress — A0 plumbing done** |
 
 ## Run commands
 
@@ -159,8 +163,39 @@ INFO  transcribed 0:19 of audio in 3.0s (RTF 0.16, 6.3x realtime)
 
 RTF = processing seconds / audio seconds. Below 1.0 is faster than realtime.
 
-All planned stages are built. The CLI exposes `check-env`, `download`,
-`transcribe`, `select`, `render`, and `run`.
+All five pipeline stages are built. The CLI exposes `check-env`, `download`,
+`transcribe`, `select`, `render`, and `run`; it is unchanged by Stage 6 so far.
+
+## Stage 6 — progress / cancel plumbing (A0 done)
+
+The GUI is being built in three commits. **A0** adds the non-visual plumbing:
+
+- `errors.CancelledError` — a `ShortsBotError`, so the GUI can treat user
+  cancellation as a clean outcome rather than a crash.
+- `pipeline.ProgressEvent(stage, fraction, message)` plus optional
+  `run_pipeline(..., progress=..., cancel_event=...)` keyword arguments.
+  Overall fractions: download `0.00–0.10`, transcribe `0.10–0.65`, select
+  `0.65–0.70`, render `0.70–1.00`. Progress callback exceptions are logged at
+  debug level and never abort a run.
+- Download and whisper report mid-stage fractions through optional
+  `on_progress` callbacks; yt-dlp's existing progress hook now reports bytes
+  downloaded and checks cancellation.
+- Optional `cancel_event` arguments were threaded through
+  `download.resolve_source`, `audio.extract_audio`, `transcribe.transcribe`,
+  `render.render_clip`, and `ffmpeg.run_ffmpeg`. All are keyword-only with
+  `None` defaults, so every existing CLI call is byte-for-byte unaffected.
+- `ffmpeg.run_ffmpeg(..., cancel_event=...)` switches from `subprocess.run`
+  to a `Popen` + 0.2 s `communicate` poll loop, terminates the child, then
+  escalates to kill after 3 s, and raises `CancelledError`.
+- Cancellation is cooperative. It is prompt during yt-dlp and ffmpeg work and
+  checked between whisper segments; it cannot interrupt model loading or the
+  middle of one whisper segment. A cancelled stage records `failed` in
+  `state.json`, but finished caches remain valid and the next run resumes.
+
+CLI regression proof for A0: all 25 unit tests pass, and
+`python main.py run "temp\_loop_test.mp4" --clips 3` produced the same three
+cached outputs before and after the plumbing (first post-change run reused
+cached audio; the cached rerun matched the baseline summary exactly).
 
 ## Module notes (for the next session)
 
@@ -170,8 +205,9 @@ All planned stages are built. The CLI exposes `check-env`, `download`,
 - `models.py` — `Word`, `Segment`, `Transcript` (+ `words_between`,
   `text_between`), `Clip`. All have `to_dict()` / `from_dict()` for caching.
   Timestamps are seconds (float).
-- `ffmpeg.py` — `run_ffmpeg(args, desc=..., cwd=...)` (adds
-  `-y -loglevel error`, raises `FFmpegError` with the last 25 stderr lines),
+- `ffmpeg.py` — `run_ffmpeg(args, desc=..., cwd=..., cancel_event=...)` (adds
+  `-y -loglevel error`, raises `FFmpegError` with the last 25 stderr lines;
+  `cancel_event` switches to a pollable `Popen` and raises `CancelledError`),
   `ffmpeg_output()`, `probe(path) -> MediaInfo(duration, width, height, fps,
   has_audio)`, `has_encoder()`, `has_filter()`, `escape_filter_path(path)`.
   `probe()` accepts audio-only files (width/height 0).
@@ -179,21 +215,26 @@ All planned stages are built. The CLI exposes `check-env`, `download`,
 - `state.py` — `State.for_source(cfg, url_or_path)` / `State.load(cfg, vid)`.
   `mark_running/mark_done/mark_failed`, `require(stage)`, `get()/set()`.
   Persists to `temp/<video_id>/state.json`.
-- `download.py` — `SourceInfo` dataclass; `resolve_source(cfg, state, force=)`
-  returns the cached result when the stage is `done` and the file still
-  exists. URL path uses yt-dlp; local path is validated + probed (rejects
-  missing files, non-videos, and videos with no audio track).
+- `download.py` — `SourceInfo` dataclass; `resolve_source(cfg, state, force=,
+  on_progress=None, cancel_event=None)` returns the cached result when the
+  stage is `done` and the file still exists. URL path uses yt-dlp; local path
+  is validated + probed (rejects missing files, non-videos, and videos with no
+  audio track). The yt-dlp hook reports bytes downloaded and checks for
+  cancellation.
   `_translate_error()` maps yt-dlp errors to actionable messages
   (private / unavailable / age-restricted / bot check / geo / network).
-- `audio.py` — `extract_audio(state, source, force=)` → `audio.wav`,
-  16 kHz mono PCM s16le. Verifies duration against the video.
-- `transcribe.py` — `transcribe(cfg, state, force=) -> Transcript`.
-  Loads the model lazily (keeps `--help` fast), `word_timestamps=True`,
+- `audio.py` — `extract_audio(state, source, force=, cancel_event=None)` →
+  `audio.wav`, 16 kHz mono PCM s16le. Verifies duration against the video.
+- `transcribe.py` — `transcribe(cfg, state, force=, on_progress=None,
+  cancel_event=None) -> Transcript`. Loads the model lazily (keeps `--help`
+  fast), `word_timestamps=True`,
   `condition_on_previous_text=False` (stops hallucination loops on long
   videos), VAD per config. Writes `transcript.json` atomically and stores a
   cache signature (`model/compute/lang/vad`) in state: changing those settings
   re-transcribes automatically instead of silently reusing the old model's
-  output. Model is freed with `del` + `gc.collect()` after use.
+  output. Model is freed with `del` + `gc.collect()` after use. Progress and
+  cancellation are checked between decoded segments, so a cancel can take up
+  to one segment (or the model load) to take effect.
   `load_transcript(state) -> Transcript` reads the cache and raises a clear
   `StageError` telling you to run `transcribe` if it is missing.
 - `selection.py` — `select_clips(cfg, state, max_clips=None) ->
@@ -224,8 +265,9 @@ All planned stages are built. The CLI exposes `check-env`, `download`,
   the previous chunk instead of leaving an orphan. Events are held 0.15 s and
   trimmed at the next event so captions never overlap. `{`, `}`, and `\` are
   neutralised so whisper text cannot inject ASS markup.
-- `render.py` — `render_clip(cfg, state, index) -> RenderResult`. Loads
-  `clips.json`, writes `captions/clip_<index>.ass`, and runs one ffmpeg pass:
+- `render.py` — `render_clip(cfg, state, index, cancel_event=None) ->
+  RenderResult`. Loads `clips.json`, writes `captions/clip_<index>.ass`, and
+  runs one ffmpeg pass:
   `-ss`/`-t` cut → `scale/crop` (`center`) or blurred quarter-size background
   + centred foreground (`blur_pad`) → `fps` → `ass` → libx264 +
   `aac` + `+faststart`. It then `probe()`s the output and refuses success
@@ -235,10 +277,13 @@ All planned stages are built. The CLI exposes `check-env`, `download`,
   stored signature (clip bounds/text + render + caption settings) still matches and
   ffprobe verification passes; otherwise it returns `None` so the caller
   re-renders. `render_clip` always renders fresh.
-- `pipeline.py` — `run_pipeline(cfg, source, max_clips=None, clean=False) ->
-  RunResult`. Calls the same stage modules as the individual commands, so
-  download/transcribe/render caches apply. Per-clip render exceptions are
-  caught and recorded, never aborting the batch. `RunResult.successes`,
+- `pipeline.py` — `run_pipeline(cfg, source, max_clips=None, clean=False,
+  progress=None, cancel_event=None) -> RunResult`. Calls the same stage modules
+  as the individual commands, so download/transcribe/render caches apply.
+  `progress` receives `ProgressEvent(stage, fraction, message)`; callback
+  errors are swallowed. `cancel_event` is checked between stages and clips.
+  Per-clip render exceptions are caught and recorded, never aborting the
+  batch, but `CancelledError` is always re-raised. `RunResult.successes`,
   `.failures`, and `.return_code` drive the CLI summary and exit code.
   `_clean_temp()` only deletes candidates that resolve inside the work folder,
   so a local input video is never removed.
@@ -251,6 +296,13 @@ All planned stages are built. The CLI exposes `check-env`, `download`,
 - `tests/test_heuristic.py` — 10 stdlib `unittest` cases (scoring, boundaries,
   overlap, limit, empty/too-short/too-long edge cases). No whisper or ffmpeg.
   Run with `venv\Scripts\python.exe -m unittest discover -s tests -v`.
+- `tests/test_pipeline_progress.py` — 5 tests with mocked stages: progress
+  stage order/monotonicity, mid-stage download/whisper fractions, callback
+  exceptions, cancel-before-start, cancel-after-download, and cancel during
+  render not being mistaken for a per-clip failure. No media.
+- `tests/test_ffmpeg_cancel.py` — 2 tests with a fake `Popen`: pre-set cancel
+  terminates the child and raises `CancelledError`; normal completion returns
+  normally. No ffmpeg binary needed.
 - `jsonio.py` — `write_json()` (atomic via `.tmp` + `os.replace`),
   `read_json()`; both raise `StageError` on failure.
 - `formatting.py` — `format_duration()` ("2:41"), `format_size()` ("12.3 MB").
@@ -258,7 +310,8 @@ All planned stages are built. The CLI exposes `check-env`, `download`,
   `(ok, detail, hint)` and never raises.
 - `errors.py` — `ShortsBotError` base; CLI prints these without a traceback.
   Subclasses: `ConfigError`, `DependencyError`, `FFmpegError`,
-  `DownloadError`, `TranscriptionError`, `RenderError`, `StageError`.
+  `DownloadError`, `TranscriptionError`, `RenderError`, `StageError`,
+  `CancelledError` (user cancellation, treated as a clean outcome by the GUI).
 
 ## Known issues / gotchas
 
@@ -325,16 +378,29 @@ All planned stages are built. The CLI exposes `check-env`, `download`,
 17. **End-to-end timings** on this CPU with the looped 1:54 fixture and
     `--clips 3`: first run 20.4 s total (three renders); fully cached rerun
     0.9 s. `--clean` removed 3.0 MB `source.mp4` + 3.5 MB `audio.wav`.
+18. **Cancellation is cooperative.** yt-dlp and ffmpeg stop within ~0.2 s of
+    the cancel event; whisper is checked between decoded segments, so it can
+    take one segment (or the model load) to notice. A cancelled stage is
+    recorded as `failed` in `state.json`, but completed caches remain valid.
+    The GUI's close-during-job flow must wait for the worker's acknowledgement;
+    never destroy the window while the worker is still touching state.
 
 ## Next action
 
-All five planned stages are built, and Stage 5 is committed and awaiting the
-user's test. Do not start new work until the user confirms.
+Stage 6 A0 (progress/cancel plumbing) is committed and awaiting the user's
+test. Do not start GUI step A until the user confirms.
 
-Natural next steps once confirmed:
+Requested test for A0:
 
-- Run one real long YouTube video end-to-end and judge the heuristic clips.
-- Flip `transcription.model_size` from `base` to `small` for real use.
-- Implement an LLM selector behind `selectors/base.py` if the heuristic picks
-  are not good enough; register it in `selectors/__init__.py` and set
-  `selection.selector` in `config.yaml`.
+```
+venv\Scripts\python.exe -m unittest discover -s tests -v
+venv\Scripts\python.exe main.py run "temp\_loop_test.mp4" --clips 3
+```
+
+Expected: 25 tests pass; the run prints the same three cached outputs
+(`clip01/02/03`, 0:21 / 0:21 / 0:25) and `3 rendered, 0 failed`.
+
+After confirmation, build GUI step A (window, settings, background job), then
+step B (results, errors). Still open: run one real long YouTube video
+end-to-end, flip `transcription.model_size` from `base` to `small`, and
+consider an LLM selector behind `selectors/base.py`.
