@@ -26,6 +26,16 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 MODEL_SIZES = ("tiny", "base", "small", "medium", "large-v3")
 COMPUTE_TYPES = ("int8", "int8_float32", "float32", "float16")
 CROP_MODES = ("blur_pad", "center")
+SUPPORTED_BROWSERS = (
+    "chrome",
+    "firefox",
+    "opera",
+    "edge",
+    "brave",
+    "vivaldi",
+    "safari",
+    "whale",
+)
 X264_PRESETS = (
     "ultrafast",
     "superfast",
@@ -353,16 +363,24 @@ def _scalar_text(value: Any) -> str:
 
 def ensure_directories(cfg: Config) -> None:
     """Create the working directories declared in the config."""
+    paths = getattr(cfg, "paths", None)
+    if paths is None:
+        return
+    logging_cfg = getattr(cfg, "logging", None)
+    log_file = getattr(logging_cfg, "file", None)
+    log_dir = log_file.parent if isinstance(log_file, Path) else None
+
     for path in (
-        cfg.paths.downloads,
-        cfg.paths.temp,
-        cfg.paths.output,
-        cfg.logging.file.parent,
+        getattr(paths, "downloads", None),
+        getattr(paths, "temp", None),
+        getattr(paths, "output", None),
+        log_dir,
     ):
-        try:
-            path.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            raise ConfigError(f"cannot create directory {path}: {exc}") from exc
+        if path is not None:
+            try:
+                Path(path).mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise ConfigError(f"cannot create directory {path}: {exc}") from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -459,11 +477,17 @@ def _parse_download(section: dict[str, Any]) -> DownloadConfig:
     max_height = _int(section, "max_height", "download.max_height")
     if not 144 <= max_height <= 4320:
         raise ConfigError("download.max_height must be between 144 and 4320")
+    browser = _opt_str(
+        section, "cookies_from_browser", "download.cookies_from_browser"
+    )
+    if browser is not None and browser.lower() not in SUPPORTED_BROWSERS:
+        raise ConfigError(
+            f"download.cookies_from_browser must be one of {', '.join(SUPPORTED_BROWSERS)} "
+            f"(got {browser!r})"
+        )
     return DownloadConfig(
         max_height=max_height,
-        cookies_from_browser=_opt_str(
-            section, "cookies_from_browser", "download.cookies_from_browser"
-        ),
+        cookies_from_browser=browser.lower() if browser else None,
     )
 
 
@@ -518,6 +542,11 @@ def _parse_selection(section: dict[str, Any]) -> SelectionConfig:
 
 
 def _parse_render(section: dict[str, Any]) -> RenderConfig:
+    bitrate = _str(section, "audio_bitrate", "render.audio_bitrate")
+    if not re.match(r"^\d+[kKmM]?$", bitrate):
+        raise ConfigError(
+            f"render.audio_bitrate must be a valid bitrate like '128k' or '192k' (got {bitrate!r})"
+        )
     return RenderConfig(
         width=_int(section, "width", "render.width"),
         height=_int(section, "height", "render.height"),
@@ -525,14 +554,19 @@ def _parse_render(section: dict[str, Any]) -> RenderConfig:
         crop_mode=_choice(section, "crop_mode", "render.crop_mode", CROP_MODES),
         preset=_choice(section, "preset", "render.preset", X264_PRESETS),
         crf=_int(section, "crf", "render.crf"),
-        audio_bitrate=_str(section, "audio_bitrate", "render.audio_bitrate"),
+        audio_bitrate=bitrate,
     )
 
 
 def _parse_captions(section: dict[str, Any]) -> CaptionsConfig:
+    font = _str(section, "font", "captions.font")
+    if not re.match(r"^[a-zA-Z0-9\s_-]+$", font):
+        raise ConfigError(
+            f"captions.font must contain only letters, numbers, hyphens and spaces (got {font!r})"
+        )
     return CaptionsConfig(
         enabled=_bool(section, "enabled", "captions.enabled"),
-        font=_str(section, "font", "captions.font"),
+        font=font,
         font_size=_int(section, "font_size", "captions.font_size"),
         max_words_per_line=_int(
             section, "max_words_per_line", "captions.max_words_per_line"
@@ -552,8 +586,12 @@ def _validate(
         raise ConfigError(
             "selection.min_seconds must be smaller than selection.max_seconds"
         )
+    if selection.max_seconds > 180:
+        raise ConfigError("selection.max_seconds cannot exceed 180 seconds")
     if selection.max_clips < 1:
         raise ConfigError("selection.max_clips must be at least 1")
+    if selection.max_clips > 50:
+        raise ConfigError("selection.max_clips cannot exceed 50")
     for name, value in (
         ("speech_density", selection.weights.speech_density),
         ("keywords", selection.weights.keywords),

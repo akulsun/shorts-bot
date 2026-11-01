@@ -24,7 +24,7 @@ from .config import (
     save_config_values,
 )
 from .download import is_url
-from .errors import ConfigError
+from .errors import ConfigError, DownloadError
 from .formatting import format_duration
 
 
@@ -187,8 +187,11 @@ def validate_source(text: str) -> str:
     source = str(text).strip().strip('"').strip("'")
     if not source:
         raise ConfigError("Enter a YouTube URL or choose a local video file.")
-    if is_url(source):
-        return source
+    try:
+        if is_url(source):
+            return source
+    except DownloadError as exc:
+        raise ConfigError(str(exc)) from exc
 
     path = Path(source).expanduser()
     if not path.exists():
@@ -284,12 +287,12 @@ def short_error(message: str, limit: int = 160) -> str:
 
 def clip_file_error(path: Path | str) -> str:
     """Return an empty string when a clip can be opened, else an explanation."""
-    path = Path(path)
-    if path.is_file():
+    target = Path(path)
+    if target.is_file():
         return ""
-    if path.exists():
-        return f"The clip path is not a file:\n{path}"
-    return f"The clip file no longer exists:\n{path}"
+    if target.exists():
+        return f"The clip path is not a file:\n{target}"
+    return f"The clip file no longer exists:\n{target}"
 
 
 def open_file(path: Path | str) -> None:
@@ -307,13 +310,17 @@ def open_folder(path: Path | str) -> None:
     """Open the folder containing the file, selecting the file on Windows if possible."""
     target = Path(path).resolve()
     if sys.platform == "win32":
+        target_str = str(target)
+        if "," not in target_str:
+            try:
+                subprocess.Popen(["explorer", f"/select,{target}"])
+                return
+            except Exception:
+                pass
         try:
-            # explorer /select,<path> opens Explorer with the file highlighted.
-            # explorer.exe returns exit code 1 even on normal launch, so Popen without check.
-            subprocess.Popen(["explorer", f"/select,{target}"])
+            os.startfile(str(target.parent))
             return
         except Exception:
-            os.startfile(str(target.parent))
             return
     if sys.platform == "darwin":
         subprocess.run(["open", "-R", str(target)], check=False)

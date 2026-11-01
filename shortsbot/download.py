@@ -7,7 +7,9 @@ in temp/<video_id>/state.json, so re-running with the same input is free.
 from __future__ import annotations
 
 import logging
+import re
 import threading
+import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,8 +65,22 @@ class SourceInfo:
         )
 
 
+MAX_SOURCE_DURATION = 7200.0  # 2 hours
+
+
 def is_url(source: str) -> bool:
-    return source.strip().lower().startswith(("http://", "https://"))
+    parsed = urllib.parse.urlsplit(source.strip())
+    # Distinguish Windows drive letters (e.g. C:\...) from URL schemes
+    is_win_drive = len(parsed.scheme) == 1 and parsed.scheme.isalpha()
+    scheme = "" if is_win_drive else parsed.scheme.lower()
+    if scheme in ("http", "https"):
+        return True
+    if scheme:
+        raise DownloadError(
+            f"unsupported URL scheme '{scheme}://'; only http://, https://, "
+            f"or local video file paths are supported"
+        )
+    return False
 
 
 def resolve_source(
@@ -167,6 +183,11 @@ def _read_local(_cfg: Config, state: State) -> SourceInfo:
         )
     if media.duration <= 0:
         raise DownloadError(f"{path.name} reports a zero duration; the file looks broken")
+    if media.duration > MAX_SOURCE_DURATION:
+        raise DownloadError(
+            f"{path.name} duration ({format_duration(media.duration)}) exceeds "
+            f"the maximum allowed limit of {format_duration(MAX_SOURCE_DURATION)}"
+        )
 
     log.info("using local file: %s", path)
     return SourceInfo(
@@ -204,6 +225,8 @@ def _download_url(
             info = ydl.extract_info(state.source, download=True)
             if not isinstance(info, dict):
                 raise DownloadError("yt-dlp returned no information for this URL")
+            if info.get("is_live"):
+                raise DownloadError("live streams are not supported")
             path = _final_path(ydl, info, dest)
         _check_cancel(cancel_event)
     except yt_dlp.utils.DownloadError as exc:
@@ -222,13 +245,21 @@ def _download_url(
             f"so there is nothing to transcribe"
         )
 
-    title = str(info.get("title") or path.stem)
+    duration = media.duration or float(info.get("duration") or 0.0)
+    if duration > MAX_SOURCE_DURATION:
+        raise DownloadError(
+            f"video duration ({format_duration(duration)}) exceeds "
+            f"the maximum allowed limit of {format_duration(MAX_SOURCE_DURATION)}"
+        )
+
+    raw_title = str(info.get("title") or path.stem)
+    title = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", raw_title).strip() or path.stem
     log.info("downloaded '%s' (%s)", title, format_duration(media.duration))
     return SourceInfo(
         video_id=state.video_id,
         title=title,
         path=path,
-        duration=media.duration or float(info.get("duration") or 0.0),
+        duration=duration,
         width=media.width,
         height=media.height,
         is_local=False,
@@ -256,6 +287,8 @@ def _ydl_options(
         "paths": {"home": str(dest)},
         "outtmpl": {"default": f"{SOURCE_STEM}.%(ext)s"},
         "noplaylist": True,
+        "max_downloads": 1,
+        "playlist_items": "1",
         "quiet": True,
         "no_warnings": False,
         "no_color": True,

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import audio, download, render, selection, transcribe
-from .config import Config
+from .config import Config, ensure_directories
 from .errors import CancelledError
 from .formatting import format_size
 from .models import Clip
@@ -81,6 +81,7 @@ def run_pipeline(
     safe points exposed by each stage.
     """
     _check_cancel(cancel_event)
+    ensure_directories(cfg)
     state = State.for_source(cfg, source)
 
     _emit(progress, "download", 0.0, "Downloading source...")

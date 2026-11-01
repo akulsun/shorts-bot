@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,7 +64,17 @@ class State:
     def load(
         cls, cfg: Config, video_id: str, *, source: str | None = None
     ) -> "State":
-        workdir = cfg.paths.temp / video_id
+        vid = str(video_id or "").strip()
+        if not re.match(r"^[a-fA-F0-9]{10}$", vid):
+            raise StageError(
+                f"invalid video id '{video_id}': expected 10 hexadecimal characters"
+            )
+        temp_dir = cfg.paths.temp.resolve()
+        workdir = (temp_dir / vid).resolve()
+        if not workdir.is_relative_to(temp_dir):
+            raise StageError(
+                f"video id '{video_id}' resolves outside temp directory"
+            )
         path = workdir / "state.json"
 
         if path.exists():

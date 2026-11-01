@@ -265,7 +265,7 @@ def probe(path: Path) -> MediaInfo:
             "json",
             "-show_format",
             "-show_streams",
-            str(path),
+            str(Path(path).resolve()),
         ],
         desc=f"probing {Path(path).name}",
         timeout=120,
