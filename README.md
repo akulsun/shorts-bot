@@ -13,6 +13,8 @@ The pipeline is: **download → transcribe → select → render**.
   `ass` filter)
 - ~1–2 GB free disk for the whisper model and temporary files
 - No GPU required
+- The desktop app uses `customtkinter==6.0.0`, already included in
+  `requirements.txt`
 
 ## Setup
 
@@ -79,6 +81,39 @@ Useful variants:
 ... run "<url-or-path>" --clips 1         # one clip instead of config
 ... run "<url-or-path>" --keep-temp       # explicit default
 ```
+
+## Desktop app
+
+Start the window from the project folder:
+
+```
+venv\Scripts\python.exe gui.py
+```
+
+or through the CLI:
+
+```
+venv\Scripts\python.exe main.py gui
+```
+
+Paste a YouTube URL or choose a local file, adjust the five settings, and click
+**Start**. The log panel mirrors the normal pipeline log, and the progress bar
+covers download, transcription, selection, and rendering. Start and the
+settings fields are disabled while a job runs.
+
+**Save settings** writes Clips, Whisper model, Crop, Min seconds, and Max
+seconds to `config.yaml`. Values are validated first; if anything is wrong, the
+app shows the error and leaves `config.yaml` untouched. Unsaved form values
+still apply to the next run started from the window.
+
+**Cancel** asks the pipeline to stop at its next safe point and logs
+`Cancelling... waiting for the current step to reach a safe point`. A render
+stops within a couple of seconds; transcription can take up to one decoded
+segment. Closing the window during a job asks for confirmation and waits for
+the worker to stop.
+
+This first GUI step shows a one-line result summary; the full per-clip results
+list is next.
 
 ## Configuration
 

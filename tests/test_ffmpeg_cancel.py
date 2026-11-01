@@ -46,7 +46,13 @@ class CancellableFfmpegTests(unittest.TestCase):
         event.set()
         process = FakeProcess()
 
-        with patch("shortsbot.ffmpeg.subprocess.Popen", return_value=process) as popen:
+        with (
+            patch("shortsbot.ffmpeg.subprocess.Popen", return_value=process) as popen,
+            patch(
+                "shortsbot.ffmpeg._terminate_tree",
+                side_effect=lambda _process: process.terminate(),
+            ),
+        ):
             with self.assertRaises(CancelledError):
                 ffmpeg.run_ffmpeg(
                     ["-i", "input.mp4"],
@@ -57,6 +63,20 @@ class CancellableFfmpegTests(unittest.TestCase):
         popen.assert_called_once()
         self.assertTrue(process.terminated)
         self.assertFalse(process.killed)
+
+    def test_windows_stop_kills_the_whole_process_tree(self):
+        process = FakeProcess()
+        process.pid = 4242
+
+        with (
+            patch("shortsbot.ffmpeg.os.name", "nt"),
+            patch("shortsbot.ffmpeg.subprocess.run") as run,
+        ):
+            ffmpeg._terminate_tree(process)
+
+        args = run.call_args.args[0]
+        self.assertEqual(args[:5], ["taskkill", "/PID", "4242", "/T", "/F"])
+        self.assertTrue(run.call_args.kwargs["timeout"] == 5)
 
     def test_normal_completion_still_returns_none(self):
         event = threading.Event()

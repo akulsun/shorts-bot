@@ -9,6 +9,9 @@ Rules:
 from __future__ import annotations
 
 import copy
+import os
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -240,6 +243,112 @@ def load_config(path: str | Path | None = None) -> Config:
         render=render_cfg,
         captions=captions_cfg,
     )
+
+
+def save_config_values(path: str | Path, values: Mapping[str, Any]) -> Config:
+    """Update dotted scalar keys in a YAML config without losing comments.
+
+    The candidate is written to a temporary file in the same folder and passed
+    through `load_config()` before the real file is replaced.  Any validation
+    error therefore leaves the original config completely untouched.
+
+    Only flat `section.key` paths are accepted, e.g.
+    `{"selection.max_clips": 5, "transcription.model_size": "small"}`.
+    """
+    config_path = Path(path).expanduser().resolve()
+    if not config_path.exists():
+        raise ConfigError(f"config file not found: {config_path}")
+    try:
+        original = config_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"cannot read {config_path}: {exc}") from exc
+
+    lines = original.splitlines()
+    for dotted, value in values.items():
+        section, separator, key = str(dotted).partition(".")
+        if not separator or not section or not key or "." in key:
+            raise ConfigError(
+                f"settings key must look like section.key (got {dotted!r})"
+            )
+        lines = _set_yaml_scalar(lines, section, key, _scalar_text(value))
+
+    candidate = "\n".join(lines).rstrip() + "\n"
+    temp_path = config_path.with_name(f".{config_path.name}.tmp")
+    try:
+        temp_path.write_text(candidate, encoding="utf-8", newline="\n")
+        load_config(temp_path)
+    except ConfigError:
+        temp_path.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        temp_path.unlink(missing_ok=True)
+        raise ConfigError(f"cannot save {config_path}: {exc}") from exc
+
+    try:
+        os.replace(temp_path, config_path)
+    except OSError as exc:
+        temp_path.unlink(missing_ok=True)
+        raise ConfigError(f"cannot write {config_path}: {exc}") from exc
+    return load_config(config_path)
+
+
+def _set_yaml_scalar(
+    lines: list[str], section: str, key: str, value: str
+) -> list[str]:
+    """Return a copy of `lines` with one `section.key` scalar changed."""
+    result = list(lines)
+    section_pattern = re.compile(
+        rf"^{re.escape(section)}:\s*(?:#.*)?$"
+    )
+    start = next(
+        (index for index, line in enumerate(result) if section_pattern.match(line)),
+        None,
+    )
+    if start is None:
+        if result and result[-1].strip():
+            result.append("")
+        result.extend([f"{section}:", f"  {key}: {value}"])
+        return result
+
+    end = len(result)
+    for index in range(start + 1, len(result)):
+        if re.match(r"^[^\s#][^:]*:\s*(?:#.*)?$", result[index]):
+            end = index
+            break
+
+    key_pattern = re.compile(
+        rf"^(\s*){re.escape(key)}:(\s*)(.*?)(\s+#.*)?$"
+    )
+    for index in range(start + 1, end):
+        match = key_pattern.match(result[index])
+        if match:
+            indent = match.group(1) or "  "
+            comment = match.group(4) or ""
+            result[index] = f"{indent}{key}: {value}{comment}"
+            return result
+
+    insert_at = end
+    while insert_at > start + 1 and not result[insert_at - 1].strip():
+        insert_at -= 1
+    result.insert(insert_at, f"  {key}: {value}")
+    return result
+
+
+def _scalar_text(value: Any) -> str:
+    """Render one value in the flat YAML style used by config.yaml."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    text = str(value)
+    if "\n" in text or "\r" in text:
+        raise ConfigError("config values cannot contain line breaks")
+    dumped = yaml.safe_dump(
+        text, default_flow_style=True, allow_unicode=True
+    ).splitlines()
+    return dumped[0].strip() if dumped else "''"
 
 
 def ensure_directories(cfg: Config) -> None:

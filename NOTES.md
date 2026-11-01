@@ -14,9 +14,8 @@ with burned-in word-level captions. Free, local, CPU-only, no paid APIs.
 
 - Windows, Ryzen 4500U, 8 GB RAM, no GPU
 - Python **3.14.8** — works; all deps have `cp314` wheels
-- `customtkinter==6.0.0` verified on Python 3.14.8 / Tk 9.0 (window smoke
-  test passed). It is installed in `venv/` for Stage 6; `requirements.txt`
-  gets the pin in GUI step A.
+- `customtkinter==6.0.0` verified on Python 3.14.8 / Tk 9.0 (window and widget
+  smoke tests passed); it is pinned in `requirements.txt`.
 - ffmpeg 9.0.2 (gyan "essentials" build) via Chocolatey, on PATH
   - has `libx264`, `aac`, and the `ass` filter
 - venv at `venv/` (gitignored). Recreate with:
@@ -82,7 +81,7 @@ cache hit.
 | 3 | Clip selection | `selectors/base.py`, `selectors/heuristic.py`, `selectors/__init__.py` | **done** |
 | 4 | Render (cut + 9:16 + captions) | `captions.py`, `render.py` | **done** |
 | 5 | Batch / end-to-end | `pipeline.py`, `selection.py` | **done** |
-| 6 | Desktop GUI | `gui.py`, `shortsbot/gui.py`, `shortsbot/gui_support.py` | **in progress — A0 plumbing done** |
+| 6 | Desktop GUI | `gui.py`, `shortsbot/gui.py`, `shortsbot/gui_support.py` | **in progress — step A done** |
 
 ## Run commands
 
@@ -98,6 +97,8 @@ venv\Scripts\python.exe main.py select <video_id> --top 3
 venv\Scripts\python.exe main.py render <video_id> --clip 0
 venv\Scripts\python.exe main.py run "<url-or-path>" --clips 3
 venv\Scripts\python.exe main.py run "<url-or-path>" --clips 3 --clean
+venv\Scripts\python.exe gui.py
+venv\Scripts\python.exe main.py gui
 ```
 
 `run` is the one-command path: it resolves the source, extracts audio,
@@ -164,7 +165,8 @@ INFO  transcribed 0:19 of audio in 3.0s (RTF 0.16, 6.3x realtime)
 RTF = processing seconds / audio seconds. Below 1.0 is faster than realtime.
 
 All five pipeline stages are built. The CLI exposes `check-env`, `download`,
-`transcribe`, `select`, `render`, and `run`; it is unchanged by Stage 6 so far.
+`transcribe`, `select`, `render`, `run`, and `gui`; `gui.py` is a second entry
+point to the same window.
 
 ## Stage 6 — progress / cancel plumbing (A0 done)
 
@@ -185,8 +187,9 @@ The GUI is being built in three commits. **A0** adds the non-visual plumbing:
   `render.render_clip`, and `ffmpeg.run_ffmpeg`. All are keyword-only with
   `None` defaults, so every existing CLI call is byte-for-byte unaffected.
 - `ffmpeg.run_ffmpeg(..., cancel_event=...)` switches from `subprocess.run`
-  to a `Popen` + 0.2 s `communicate` poll loop, terminates the child, then
-  escalates to kill after 3 s, and raises `CancelledError`.
+  to a `Popen` + 0.2 s `communicate` poll loop, terminates the whole process
+  tree (important on Windows: Chocolatey's `ffmpeg.exe` is a shim that starts
+  the real ffmpeg), escalates to kill after 3 s, and raises `CancelledError`.
 - Cancellation is cooperative. It is prompt during yt-dlp and ffmpeg work and
   checked between whisper segments; it cannot interrupt model loading or the
   middle of one whisper segment. A cancelled stage records `failed` in
@@ -197,21 +200,68 @@ CLI regression proof for A0: all 25 unit tests pass, and
 cached outputs before and after the plumbing (first post-change run reused
 cached audio; the cached rerun matched the baseline summary exactly).
 
+## Stage 6 — desktop window (step A done)
+
+Step A adds the visible app. It is a thin layer over the pipeline:
+
+- `gui.py` — root entry point: `python gui.py [--config path]`.
+- `shortsbot/gui.py` — `ShortsBotApp` (CustomTkinter), worker thread, queue
+  polling, Start/Cancel, and safe close. It only calls
+  `pipeline.run_pipeline`; validation and persistence live in
+  `gui_support.py`.
+- `shortsbot/gui_support.py` — display-free helpers: `GuiSettings`,
+  `save_settings`, `validate_source`, `QueueLogHandler`, `drain_queue`, and
+  the `JobSucceeded` / `JobFailed` / `JobCancelled` queue messages.
+- Settings: Clips, Whisper model, Crop, Min seconds, Max seconds. Save
+  validates through `GuiSettings.validate()`, then
+  `config.save_config_values()` writes a temporary YAML, loads it through the
+  normal parser, and only then `os.replace`s the original. Invalid values show
+  an error and leave `config.yaml` byte-for-byte untouched.
+- Start validates the source path/URL and form settings, applies them in
+  memory, disables the controls, and runs
+  `run_pipeline(..., progress=queue.put, cancel_event=...)` in a daemon worker
+  thread. The Tk thread drains that queue; a logging handler puts `LogEvent`s
+  on the same queue so the log panel and terminal output stay in sync.
+- Cancel sets the event, disables Cancel, and logs exactly
+  `Cancelling... waiting for the current step to reach a safe point`. The
+  worker reports `CancelledError` as `JobCancelled`; the stage label becomes
+  `Cancelled`.
+- Closing while a job runs asks for confirmation, requests cancellation, and
+  waits for the worker's final queue message before destroying the window.
+- The results area is a placeholder for step B: it shows
+  `Finished: N clip(s) rendered, M failed.` or the no-clips reason.
+
+Manual smoke proof for step A: the hidden widget test passed; a cached GUI run
+reached `Done`, `Finished: 3 clip(s) rendered, 0 failed.`, progress `1.0`; a
+center render cancelled in about 1.3 s with the exact cancel message in the
+log; a later uncached center render through the GUI reached `Done` in 7.7 s;
+and closing the window mid-render confirmed the prompt, cancelled the job, and
+shut down in about 1.4 s.
+The GUI-specific suite has 11 display-free tests (`tests/test_gui_support.py`),
+and the full suite is now 37 tests.
+
 ## Module notes (for the next session)
 
 - `config.py` — `load_config(path=None) -> Config`. Every tunable comes from
   `config.yaml`; relative paths resolve against the config file's folder.
   **Unknown keys are a hard error** (typo protection). `ensure_directories()`.
+  `save_config_values(path, {"section.key": value})` edits flat scalar lines
+  without rewriting comments, validates a same-folder temp file with
+  `load_config()`, then atomically replaces the original. Invalid input never
+  touches the real file.
 - `models.py` — `Word`, `Segment`, `Transcript` (+ `words_between`,
   `text_between`), `Clip`. All have `to_dict()` / `from_dict()` for caching.
   Timestamps are seconds (float).
 - `ffmpeg.py` — `run_ffmpeg(args, desc=..., cwd=..., cancel_event=...)` (adds
   `-y -loglevel error`, raises `FFmpegError` with the last 25 stderr lines;
-  `cancel_event` switches to a pollable `Popen` and raises `CancelledError`),
-  `ffmpeg_output()`, `probe(path) -> MediaInfo(duration, width, height, fps,
-  has_audio)`, `has_encoder()`, `has_filter()`, `escape_filter_path(path)`.
-  `probe()` accepts audio-only files (width/height 0).
+  `cancel_event` switches to a pollable `Popen`, kills the process tree on
+  cancel, and raises `CancelledError`), `ffmpeg_output()`, `probe(path) ->
+  MediaInfo(duration, width, height, fps, has_audio)`, `has_encoder()`,
+  `has_filter()`, `escape_filter_path(path)`. `probe()` accepts audio-only
+  files (width/height 0).
   **Note:** `-nostdin` is passed to ffmpeg only — ffprobe 9.0 rejects it.
+  On Windows, `taskkill /T` is required because Chocolatey's `ffmpeg.exe` is
+  a shim; terminating only the shim leaves the real ffmpeg rendering.
 - `state.py` — `State.for_source(cfg, url_or_path)` / `State.load(cfg, vid)`.
   `mark_running/mark_done/mark_failed`, `require(stage)`, `get()/set()`.
   Persists to `temp/<video_id>/state.json`.
@@ -287,8 +337,18 @@ cached audio; the cached rerun matched the baseline summary exactly).
   `.failures`, and `.return_code` drive the CLI summary and exit code.
   `_clean_temp()` only deletes candidates that resolve inside the work folder,
   so a local input video is never removed.
-- `README.md` — user-facing setup, one-command usage, per-stage commands, and
-  the config table. Keep it short; deep details belong in this file.
+- `gui.py` — root launcher for `python gui.py`; parses `--config` and delegates
+  to `shortsbot.gui.main()`.
+- `gui_support.py` — no Tk imports. `GuiSettings.from_config/from_form`,
+  `validate()`, `apply(cfg)` (in-memory only), `as_updates()`;
+  `save_settings(settings, cfg)`; `validate_source(text)`; queue helpers.
+- `gui.py` (`shortsbot/gui.py`) — `ShortsBotApp` plus `run_gui(cfg)` and
+  `main(config_path)`. `main()` loads the config, starts logging, ensures
+  folders, then opens the window; startup config errors use a message box.
+  The worker only calls `run_pipeline`; widget access stays on the Tk thread.
+- `README.md` — user-facing setup, one-command usage, per-stage commands,
+  desktop-app usage, and the config table. Keep it short; deep details belong
+  in this file.
 - `tests/test_captions.py` — 8 stdlib tests for chunk sizes, punctuation,
   orphan merging, clip-relative timing, boundary trimming, style values, and
   markup escaping. Run with
@@ -300,9 +360,14 @@ cached audio; the cached rerun matched the baseline summary exactly).
   stage order/monotonicity, mid-stage download/whisper fractions, callback
   exceptions, cancel-before-start, cancel-after-download, and cancel during
   render not being mistaken for a per-clip failure. No media.
-- `tests/test_ffmpeg_cancel.py` — 2 tests with a fake `Popen`: pre-set cancel
+- `tests/test_ffmpeg_cancel.py` — 3 tests with a fake `Popen`: pre-set cancel
   terminates the child and raises `CancelledError`; normal completion returns
-  normally. No ffmpeg binary needed.
+  normally; the Windows path builds a `taskkill /PID ... /T /F` tree kill. No
+  ffmpeg binary needed.
+- `tests/test_gui_support.py` — 11 display-free tests: settings save/load with
+  comment preservation, invalid saves leaving the file untouched, missing-key
+  insertion, form validation, source validation, queue handler formatting, and
+  bounded queue draining. No Tk import.
 - `jsonio.py` — `write_json()` (atomic via `.tmp` + `os.replace`),
   `read_json()`; both raise `StageError` on failure.
 - `formatting.py` — `format_duration()` ("2:41"), `format_size()` ("12.3 MB").
@@ -378,29 +443,40 @@ cached audio; the cached rerun matched the baseline summary exactly).
 17. **End-to-end timings** on this CPU with the looped 1:54 fixture and
     `--clips 3`: first run 20.4 s total (three renders); fully cached rerun
     0.9 s. `--clean` removed 3.0 MB `source.mp4` + 3.5 MB `audio.wav`.
-18. **Cancellation is cooperative.** yt-dlp and ffmpeg stop within ~0.2 s of
-    the cancel event; whisper is checked between decoded segments, so it can
-    take one segment (or the model load) to notice. A cancelled stage is
-    recorded as `failed` in `state.json`, but completed caches remain valid.
-    The GUI's close-during-job flow must wait for the worker's acknowledgement;
-    never destroy the window while the worker is still touching state.
+18. **Cancellation is cooperative.** yt-dlp and ffmpeg stop promptly (measured
+    ~1.2 s end-to-end for a render after the tree-kill fix); whisper is checked
+    between decoded segments, so it can take one segment (or the model load) to
+    notice. A cancelled stage is recorded as `failed` in `state.json`, but
+    completed caches remain valid. The GUI's close-during-job flow waits for
+    the worker's final queue message; never destroy the window while the worker
+    is still touching state.
+19. **Windows ffmpeg is a Chocolatey shim.** Killing only the shim leaves the
+    real `ffmpeg.exe` running and its stdio pipes open, so `communicate()` waits
+    for the whole render. `_terminate_tree()` uses `taskkill /PID ... /T /F`;
+    POSIX starts the child in a new session and signals the group. Keep this in
+    mind if adding another cancellable subprocess.
 
 ## Next action
 
-Stage 6 A0 (progress/cancel plumbing) is committed and awaiting the user's
-test. Do not start GUI step A until the user confirms.
+Stage 6 step A (window, settings, background job) is committed and awaiting the
+user's manual test. Do not start step B until the user confirms.
 
-Requested test for A0:
+Requested checks:
 
 ```
 venv\Scripts\python.exe -m unittest discover -s tests -v
-venv\Scripts\python.exe main.py run "temp\_loop_test.mp4" --clips 3
+venv\Scripts\python.exe gui.py
 ```
 
-Expected: 25 tests pass; the run prints the same three cached outputs
-(`clip01/02/03`, 0:21 / 0:21 / 0:25) and `3 rendered, 0 failed`.
+Expected: 37 tests pass. The window opens with the current config values; Save
+updates `config.yaml`; an invalid Save shows an error and leaves the file
+unchanged; a cached run of `temp\_loop_test.mp4` reaches `Done` with
+`Finished: 3 clip(s) rendered, 0 failed.`; Cancel during a render logs
+`Cancelling... waiting for the current step to reach a safe point` and ends at
+`Cancelled`; closing during a job asks first and only closes after the worker
+stops.
 
-After confirmation, build GUI step A (window, settings, background job), then
-step B (results, errors). Still open: run one real long YouTube video
-end-to-end, flip `transcription.model_size` from `base` to `small`, and
-consider an LLM selector behind `selectors/base.py`.
+After confirmation, build step B (per-clip results, error details, opening the
+output folder). Still open: run one real long YouTube video end-to-end, flip
+`transcription.model_size` from `base` to `small`, and consider an LLM selector
+behind `selectors/base.py`.

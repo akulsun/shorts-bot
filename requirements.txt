@@ -4,3 +4,5 @@ faster-whisper==1.2.1
 av==16.1.0
 yt-dlp>=2026.10.26
 PyYAML>=6.0
+# Desktop GUI (pure Python; verified on Python 3.14 / Tk 9.0).
+customtkinter==6.0.0

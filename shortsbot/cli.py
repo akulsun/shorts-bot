@@ -153,6 +153,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_cmd.set_defaults(func=_cmd_run, clean=False)
 
+    gui_cmd = subparsers.add_parser(
+        "gui", help="open the desktop window"
+    )
+    gui_cmd.set_defaults(func=_cmd_gui)
+
     return parser
 
 
@@ -414,6 +419,13 @@ def _cmd_run(args: argparse.Namespace, cfg: Config) -> int:
     print()
     print(f"  {len(successes)} rendered, {len(failures)} failed")
     return result.return_code
+
+
+def _cmd_gui(_args: argparse.Namespace, cfg: Config) -> int:
+    # Imported lazily so the CLI and --help stay usable without a display.
+    from .gui import run_gui
+
+    return run_gui(cfg)
 
 
 def _fmt_timestamp(seconds: float) -> str:

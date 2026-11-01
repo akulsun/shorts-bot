@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -66,6 +67,11 @@ def _run(
         except subprocess.TimeoutExpired as exc:
             raise FFmpegError(f"{desc} timed out after {timeout}s") from exc
 
+    popen_kwargs: dict[str, object] = {}
+    if os.name != "nt" and cancel_event is not None:
+        # Lets the whole ffmpeg tree be signalled on cancellation.
+        popen_kwargs["start_new_session"] = True
+
     try:
         process = subprocess.Popen(
             command,
@@ -76,6 +82,7 @@ def _run(
             errors="replace",
             creationflags=_CREATE_NO_WINDOW,
             cwd=str(cwd) if cwd is not None else None,
+            **popen_kwargs,  # type: ignore[arg-type]
         )
     except FileNotFoundError as exc:
         raise DependencyError(
@@ -90,7 +97,7 @@ def _run(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _stop_process(process)
-                stdout, stderr = process.communicate()
+                _drain(process)
                 raise FFmpegError(f"{desc} timed out after {timeout}s")
             wait = min(wait, remaining)
 
@@ -99,18 +106,52 @@ def _run(
         except subprocess.TimeoutExpired:
             if cancel_event.is_set():
                 _stop_process(process)
-                stdout, stderr = process.communicate()
+                _drain(process)
                 raise CancelledError(f"{desc} cancelled")
             continue
         return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
-def _stop_process(process: subprocess.Popen[str]) -> None:
-    """Terminate a child process, escalating to kill if it does not exit."""
-    if process.poll() is not None:
-        return
+def _terminate_tree(process: subprocess.Popen[str]) -> None:
+    """Terminate a child and every process it spawned.
+
+    On Windows, Chocolatey's `ffmpeg.exe` is a shim that launches the real
+    ffmpeg.exe. Terminating only the shim leaves the render running and keeps
+    the stdout/stderr pipes open, which makes cancellation wait for the whole
+    render. `taskkill /T` kills the real child too. On POSIX the child was
+    started in its own session, so signalling its process group has the same
+    effect.
+    """
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=_CREATE_NO_WINDOW,
+                timeout=5,
+            )
+            return
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            return
+        except (OSError, ProcessLookupError):
+            pass
     try:
         process.terminate()
+    except OSError:
+        pass
+
+
+def _stop_process(process: subprocess.Popen[str]) -> None:
+    """Terminate a child process tree, escalating to kill if it does not exit."""
+    if process.poll() is not None:
+        return
+    _terminate_tree(process)
+    try:
         process.wait(timeout=3)
         return
     except (OSError, subprocess.TimeoutExpired):
@@ -119,6 +160,28 @@ def _stop_process(process: subprocess.Popen[str]) -> None:
         process.kill()
     except OSError:
         pass
+
+
+def _drain(process: subprocess.Popen[str]) -> tuple[str, str]:
+    """Collect remaining output after a stop without ever hanging the UI."""
+    try:
+        stdout, stderr = process.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+        try:
+            process.wait(timeout=1)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                process.kill()
+            except OSError:
+                pass
+        return "", ""
+    return stdout or "", stderr or ""
 
 
 def _tail(text: str) -> str:
