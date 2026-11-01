@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import queue
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from .config import (
 )
 from .download import is_url
 from .errors import ConfigError
+from .formatting import format_duration
 
 
 # --------------------------------------------------------------------------- #
@@ -191,6 +193,100 @@ def validate_source(text: str) -> str:
     if not path.is_file():
         raise ConfigError(f"Not a file: {path}")
     return str(path.resolve())
+
+
+# --------------------------------------------------------------------------- #
+# Results
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class ResultRow:
+    """One row in the results list.
+
+    `path` is set only for rendered clips. Failed rows carry a short error
+    instead, so the window knows not to show Open buttons for them.
+    """
+
+    title: str
+    duration: str
+    path: Path | None = None
+    error: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ResultsView:
+    """Result rows plus the summary or explanation shown above them."""
+
+    rows: tuple[ResultRow, ...]
+    message: str
+
+
+def build_results(clips: Iterable[Any], reason: str = "") -> ResultsView:
+    """Turn pipeline `ClipRun` objects into display-ready result rows."""
+    runs = tuple(clips)
+    if not runs:
+        reason = str(reason).strip().rstrip(".")
+        message = "No clips were selected"
+        if reason:
+            message += f": {reason}"
+        return ResultsView(rows=(), message=f"{message}.")
+
+    rows: list[ResultRow] = []
+    rendered = 0
+    failed = 0
+    for run in runs:
+        clip = run.clip
+        duration = format_duration(clip.duration)
+        if run.result is None:
+            failed += 1
+            rows.append(
+                ResultRow(
+                    title=f"Clip #{clip.index}",
+                    duration=duration,
+                    error=short_error(run.error),
+                )
+            )
+            continue
+
+        rendered += 1
+        output = Path(run.result.output)
+        seconds = getattr(run.result.info, "duration", 0.0) or clip.duration
+        rows.append(
+            ResultRow(
+                title=output.name,
+                duration=format_duration(float(seconds)),
+                path=output,
+            )
+        )
+
+    if failed:
+        message = (
+            f"{rendered} of {len(rows)} clip(s) rendered; {failed} failed."
+        )
+    else:
+        message = f"{rendered} clip(s) rendered."
+    return ResultsView(rows=tuple(rows), message=message)
+
+
+def short_error(message: str, limit: int = 160) -> str:
+    """Collapse a render error to one short, single-line message."""
+    text = " ".join(str(message or "").split())
+    if not text:
+        return "unknown error"
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def clip_file_error(path: Path) -> str:
+    """Return an empty string when a clip can be opened, else an explanation."""
+    path = Path(path)
+    if path.is_file():
+        return ""
+    if path.exists():
+        return f"The clip path is not a file:\n{path}"
+    return f"The clip file no longer exists:\n{path}"
 
 
 def _whole_number(value: str, label: str) -> int:
