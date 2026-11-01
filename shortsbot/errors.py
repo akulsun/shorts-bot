@@ -29,5 +29,9 @@ class TranscriptionError(ShortsBotError):
     """Whisper could not be loaded or the audio could not be transcribed."""
 
 
+class RenderError(ShortsBotError):
+    """A clip could not be rendered or the output failed verification."""
+
+
 class StageError(ShortsBotError):
     """A pipeline stage cannot run yet, or its cached output is unusable."""

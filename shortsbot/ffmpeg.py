@@ -35,6 +35,7 @@ def _run(
     desc: str,
     timeout: float | None = None,
     nostdin: bool = False,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [exe, "-hide_banner"]
     if nostdin:
@@ -50,6 +51,7 @@ def _run(
             errors="replace",
             timeout=timeout,
             creationflags=_CREATE_NO_WINDOW,
+            cwd=str(cwd) if cwd is not None else None,
         )
     except FileNotFoundError as exc:
         raise DependencyError(
@@ -70,10 +72,21 @@ def run_ffmpeg(
     *,
     desc: str,
     timeout: float | None = None,
+    cwd: Path | None = None,
 ) -> None:
-    """Run ffmpeg, raising FFmpegError with the end of stderr on failure."""
+    """Run ffmpeg, raising FFmpegError with the end of stderr on failure.
+
+    `cwd` lets callers pass filtergraph paths relative to a folder whose name
+    may contain spaces or apostrophes; those characters cannot be escaped
+    reliably inside an ffmpeg filter option.
+    """
     proc = _run(
-        "ffmpeg", ["-y", "-loglevel", "error", *args], desc=desc, timeout=timeout, nostdin=True
+        "ffmpeg",
+        ["-y", "-loglevel", "error", *args],
+        desc=desc,
+        timeout=timeout,
+        nostdin=True,
+        cwd=cwd,
     )
     if proc.returncode != 0:
         raise FFmpegError(

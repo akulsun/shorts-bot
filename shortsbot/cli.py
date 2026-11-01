@@ -13,7 +13,7 @@ import textwrap
 from dataclasses import replace
 from pathlib import Path
 
-from . import audio, checks, download, jsonio, transcribe
+from . import audio, checks, download, jsonio, render, transcribe
 from .config import Config, ensure_directories, load_config
 from .errors import ConfigError, ShortsBotError
 from .formatting import format_duration, format_size
@@ -106,6 +106,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="number of clips to keep (default: selection.max_clips)",
     )
     select_cmd.set_defaults(func=_cmd_select)
+
+    render_cmd = subparsers.add_parser(
+        "render",
+        help="cut a selected clip, make it vertical and burn in captions",
+    )
+    render_cmd.add_argument(
+        "video_id", help="video id printed by the download stage"
+    )
+    render_cmd.add_argument(
+        "--clip",
+        type=int,
+        default=0,
+        metavar="N",
+        help="clip index from 'select' (default: 0, the best clip)",
+    )
+    render_cmd.set_defaults(func=_cmd_render)
 
     return parser
 
@@ -301,6 +317,48 @@ def _print_clips(
                 subsequent_indent="      ",
             )
         )
+
+
+def _cmd_render(args: argparse.Namespace, cfg: Config) -> int:
+    if args.clip < 0:
+        raise ConfigError("--clip must be 0 or greater")
+
+    state = State.load(cfg, args.video_id)
+    result = render.render_clip(cfg, state, args.clip)
+    clip = result.clip
+    info = result.info
+
+    source = state.get("source_info") or {}
+    title = str(source.get("title") or state.video_id)
+    speed = clip.duration / result.seconds if result.seconds > 0 else 0.0
+    size = result.output.stat().st_size if result.output.exists() else 0
+
+    print()
+    print(title)
+    print(
+        f"  clip      #{clip.index}  "
+        f"[{_fmt_timestamp(clip.start)} -> {_fmt_timestamp(clip.end)}]  "
+        f"{clip.duration:.1f}s  score {clip.score:.2f}"
+    )
+    print(f"  crop      {result.crop_mode}")
+    if cfg.captions.enabled:
+        print(
+            f"  captions  {result.caption_events} events "
+            f"({cfg.captions.max_words_per_line} words max)"
+        )
+    else:
+        print("  captions  off")
+    print(
+        f"  output    {_display_path(result.output, cfg)} "
+        f"({format_size(size)})"
+    )
+    print(f"  render    {result.seconds:.1f}s ({speed:.2f}x realtime)")
+    print(
+        f"  verified  {info.width}x{info.height} @ {info.fps:g} fps, "
+        f"audio {'yes' if info.has_audio else 'NO'}, "
+        f"duration {info.duration:.2f}s (clip {clip.duration:.2f}s)"
+    )
+    return 0
 
 
 def _fmt_timestamp(seconds: float) -> str:
