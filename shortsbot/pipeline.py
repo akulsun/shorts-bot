@@ -185,7 +185,8 @@ def run_pipeline(
     if clean:
         _check_cancel(cancel_event)
         if result.successes and not result.failures:
-            removed = _clean_temp(state)
+            downloads_dir = getattr(cfg.paths, "downloads", None)
+            removed = _clean_temp(state, downloads_dir=downloads_dir)
             result = RunResult(
                 state=state,
                 source=info,
@@ -231,9 +232,71 @@ def _check_cancel(cancel_event: threading.Event | None) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _clean_temp(state: State) -> tuple[tuple[Path, int], ...]:
+def clean_downloads(
+    downloads_dir: Path | str,
+    target: Path | str,
+) -> bool:
+    """Delete a downloaded source file if and only if it resides inside downloads/.
+
+    Guards against:
+    - Path traversal attacks (e.g. downloads/../secret.mp4).
+    - Deleting the downloads directory itself.
+    - Deleting user-chosen local files outside downloads/.
+    - Deleting anything in output/ or other directories.
+    - Windows file locks (PermissionError), logging a warning and continuing without crashing.
+
+    Returns True if the file was deleted, False otherwise.
+    """
+    downloads_path = Path(downloads_dir).resolve()
+    target_path = Path(target).resolve()
+
+    if target_path == downloads_path:
+        log.warning("refusing to delete downloads folder itself: %s", target_path)
+        return False
+
+    try:
+        target_path.relative_to(downloads_path)
+    except ValueError:
+        log.warning(
+            "refusing to delete file outside downloads directory: %s (downloads_dir=%s)",
+            target_path,
+            downloads_path,
+        )
+        return False
+
+    if not target_path.exists():
+        return False
+
+    if not target_path.is_file():
+        log.warning("target inside downloads is not a file: %s", target_path)
+        return False
+
+    try:
+        target_path.unlink()
+        log.info("deleted downloaded file: %s", target_path)
+        return True
+    except PermissionError as exc:
+        log.warning(
+            "could not delete %s: file is locked or permission denied (%s)",
+            target_path,
+            exc,
+        )
+        return False
+    except OSError as exc:
+        log.warning("could not delete %s: %s", target_path, exc)
+        return False
+
+
+def _clean_temp(
+    state: State,
+    downloads_dir: Path | str | None = None,
+) -> tuple[tuple[Path, int], ...]:
     """Delete the downloaded source and WAV, but never a user's local video."""
     workdir = state.workdir.resolve()
+    allowed_dirs = [workdir]
+    if downloads_dir is not None:
+        allowed_dirs.append(Path(downloads_dir).resolve())
+
     candidates: list[Path] = []
 
     info = state.get("source_info")
@@ -248,13 +311,24 @@ def _clean_temp(state: State) -> tuple[tuple[Path, int], ...]:
     for candidate in candidates:
         try:
             path = candidate.resolve()
-            if path in seen or not path.is_relative_to(workdir):
+            if path in seen:
                 continue
+
+            # Must be inside one of the allowed directories and not the directory itself
+            is_allowed = any(
+                path != d and path.is_relative_to(d) for d in allowed_dirs
+            )
+            if not is_allowed:
+                continue
+
             seen.add(path)
-            if not path.exists():
+            if not path.is_file():
                 continue
             size = path.stat().st_size
             path.unlink()
+        except PermissionError as exc:
+            log.warning("could not remove %s: file locked (%s)", candidate, exc)
+            continue
         except OSError as exc:
             log.warning("could not remove %s: %s", candidate, exc)
             continue

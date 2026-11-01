@@ -370,8 +370,13 @@ Step B completes the desktop app results and error presentation:
   Per-clip render exceptions are caught and recorded, never aborting the
   batch, but `CancelledError` is always re-raised. `RunResult.successes`,
   `.failures`, and `.return_code` drive the CLI summary and exit code.
-  `_clean_temp()` only deletes candidates that resolve inside the work folder,
-  so a local input video is never removed.
+  `clean_downloads(downloads_dir, target)` safely unlinks downloaded files
+  strictly inside `downloads/`, guarding against path traversal, folder deletion,
+  and user local / output files, catching `PermissionError` (Windows file locks).
+  `_clean_temp()` only deletes candidates that resolve inside the work folder or
+  `downloads/`, so user local input videos and final outputs are never removed.
+  Conservative cleanup: downloaded source files are only removed after a fully
+  successful run (`successes and not failures`) and kept on failed/cancelled runs.
 - `gui.py` — root launcher for `python gui.py`; parses `--config` and delegates
   to `shortsbot.gui.main()`.
 - `gui_support.py` — no Tk imports. `GuiSettings.from_config/from_form`,
@@ -399,10 +404,15 @@ Step B completes the desktop app results and error presentation:
   terminates the child and raises `CancelledError`; normal completion returns
   normally; the Windows path builds a `taskkill /PID ... /T /F` tree kill. No
   ffmpeg binary needed.
-- `tests/test_gui_support.py` — 11 display-free tests: settings save/load with
+- `tests/test_gui_support.py` — 19 display-free tests: settings save/load with
   comment preservation, invalid saves leaving the file untouched, missing-key
-  insertion, form validation, source validation, queue handler formatting, and
-  bounded queue draining. No Tk import.
+  insertion, form validation, source validation, queue handler formatting,
+  bounded queue draining, and Step B results view building, errors, and file checks. No Tk import.
+- `tests/test_cleanup.py` — 11 display-free tests for `clean_downloads` and
+  pipeline cleanup: verifying downloads directory containment, path traversal
+  protection, refusal to delete outside files or the folder itself, handling
+  Windows `PermissionError` file locks, keeping files on failed or cancelled runs,
+  cleaning on success, and backwards-compatible config loading with or without `downloads`.
 - `jsonio.py` — `write_json()` (atomic via `.tmp` + `os.replace`),
   `read_json()`; both raise `StageError` on failure.
 - `formatting.py` — `format_duration()` ("2:41"), `format_size()` ("12.3 MB").
@@ -493,29 +503,19 @@ Step B completes the desktop app results and error presentation:
 
 ## Next action
 
-Stage 6 step B (results list, action buttons, in-window errors and dialogs) is
-implemented and awaiting user manual test.
+Stage 6 step B and `downloads/` cleanup commit are complete and tested.
+Total test suite: 56 tests passing.
 
 Requested checks:
 
 ```
 venv\Scripts\python.exe -m unittest discover -s tests -v
-venv\Scripts\python.exe gui.py
 ```
 
-Expected:
-1. 45 unit tests pass.
-2. Clicking "Start" with an empty source shows in-window error and "Shorts Bot" error dialog.
-3. Entering a nonexistent local path shows in-window error and "Shorts Bot" error dialog.
-4. Running a valid source (e.g. `temp\_loop_test.mp4`) renders clips and displays each in
-   the Results list with filename, duration, and "Open file" / "Open folder" buttons.
-5. "Open file" opens the clip in the default media player; "Open folder" selects the file
-   in Windows Explorer.
-6. If a rendered clip is deleted and "Open file" or "Open folder" is clicked, an in-window
-   error and a "File Not Found" dialog appear.
-7. A run that produces 0 clips displays the explanation without error dialogs.
+Expected: All 56 unit tests pass, verifying captions, heuristic selection,
+cancellation, progress, GUI support, results presentation, download containment,
+Windows file lock tolerance, conservative cleanup behavior, and config compatibility.
 
-After confirmation: proceed with the separate `downloads/` cleanup commit (removing
-unused `downloads/` references and ensuring legacy `config.yaml` with `downloads` loads
-safely with a warning). Still open: flip `transcription.model_size` to `small`, and consider
-an LLM selector behind `selectors/base.py`.
+Still open: run one real long YouTube video end-to-end, flip
+`transcription.model_size` from `base` to `small`, and consider an LLM selector
+behind `selectors/base.py`.

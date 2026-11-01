@@ -443,8 +443,13 @@ def _parse_logging(section: dict[str, Any], root: Path) -> LoggingConfig:
 
 
 def _parse_paths(section: dict[str, Any], root: Path) -> PathsConfig:
+    downloads = (
+        _path(section, "downloads", "paths.downloads", root)
+        if "downloads" in section
+        else (root / "downloads")
+    )
     return PathsConfig(
-        downloads=_path(section, "downloads", "paths.downloads", root),
+        downloads=downloads,
         temp=_path(section, "temp", "paths.temp", root),
         output=_path(section, "output", "paths.output", root),
     )

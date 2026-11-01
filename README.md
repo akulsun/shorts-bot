@@ -57,8 +57,10 @@ them after a **fully successful** run (default: `--keep-temp`):
 venv\Scripts\python.exe main.py run "<url-or-path>" --clips 3 --clean
 ```
 
-`--clean` only removes the downloaded copy inside `temp/<id>/` and the
-extracted `audio.wav`. A local input file you passed in is never deleted.
+`--clean` only removes files the app downloaded itself (or extracted audio)
+inside the working / downloads directory. A local input file you passed in or
+anything in `output/` is never touched. If any clip fails to render or the run
+is cancelled, files are kept so re-runs do not need to re-download.
 
 ## Run stages individually
 
