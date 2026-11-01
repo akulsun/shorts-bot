@@ -30,6 +30,7 @@ class RenderResult:
     crop_mode: str
     seconds: float
     caption_events: int
+    cached: bool = False
 
 
 def render_clip(cfg: Config, state: State, index: int) -> RenderResult:
@@ -83,6 +84,17 @@ def render_clip(cfg: Config, state: State, index: int) -> RenderResult:
         duration=round(info.duration, 3),
         seconds=round(seconds, 2),
     )
+    cache = state.get("render_cache")
+    if not isinstance(cache, dict):
+        cache = {}
+    cache[str(clip.index)] = {
+        "signature": _signature(cfg, clip),
+        "path": str(output),
+        "duration": round(info.duration, 3),
+        "seconds": round(seconds, 2),
+        "caption_events": caption_events,
+    }
+    state.set("render_cache", cache)
     log.info(
         "rendered %s in %.1fs (%.1fx realtime)",
         output.name,
@@ -96,6 +108,45 @@ def render_clip(cfg: Config, state: State, index: int) -> RenderResult:
         crop_mode=cfg.render.crop_mode,
         seconds=seconds,
         caption_events=caption_events,
+    )
+
+
+def cached_render(cfg: Config, state: State, index: int) -> RenderResult | None:
+    """Return a previously verified render if settings and files are unchanged."""
+    clips, reason = _load_clips(state)
+    clip = _find_clip(clips, index, reason, cfg)
+
+    cache = state.get("render_cache")
+    record = cache.get(str(index)) if isinstance(cache, dict) else None
+    if not isinstance(record, dict):
+        return None
+    if record.get("signature") != _signature(cfg, clip):
+        log.info("render settings changed; rendering clip #%d again", index)
+        return None
+
+    raw = record.get("path")
+    if not raw:
+        return None
+    output = Path(str(raw))
+    if not output.exists():
+        log.info("cached render is gone from disk; rendering clip #%d again", index)
+        return None
+
+    try:
+        info = _verify(output, clip, cfg)
+    except Exception as exc:  # noqa: BLE001 - a bad cache must fall back to render
+        log.warning("cached render failed verification (%s); rendering again", exc)
+        return None
+
+    log.info("using cached render: %s", output.name)
+    return RenderResult(
+        output=output,
+        info=info,
+        clip=clip,
+        crop_mode=cfg.render.crop_mode,
+        seconds=float(record.get("seconds", 0.0) or 0.0),
+        caption_events=int(record.get("caption_events", 0) or 0),
+        cached=True,
     )
 
 
@@ -297,6 +348,32 @@ def _verify(output: Path, clip: Clip, cfg: Config) -> MediaInfo:
 # --------------------------------------------------------------------------- #
 # Naming
 # --------------------------------------------------------------------------- #
+
+
+def _signature(cfg: Config, clip: Clip) -> str:
+    """Settings that make an existing MP4 stale when any of them changes."""
+    captions = cfg.captions
+    render = cfg.render
+    values = (
+        f"{clip.start:.3f}",
+        f"{clip.end:.3f}",
+        clip.text,
+        render.crop_mode,
+        render.width,
+        render.height,
+        render.fps,
+        render.preset,
+        render.crf,
+        render.audio_bitrate,
+        int(captions.enabled),
+        captions.font,
+        captions.font_size,
+        captions.max_words_per_line,
+        captions.margin_v,
+        captions.outline,
+        int(captions.bold),
+    )
+    return "|".join(str(value) for value in values)
 
 
 def _output_name(cfg: Config, state: State, clip: Clip) -> str:

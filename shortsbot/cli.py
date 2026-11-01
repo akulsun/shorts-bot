@@ -10,15 +10,13 @@ import argparse
 import logging
 import sys
 import textwrap
-from dataclasses import replace
 from pathlib import Path
 
-from . import audio, checks, download, jsonio, render, transcribe
+from . import audio, checks, download, pipeline, render, selection, transcribe
 from .config import Config, ensure_directories, load_config
 from .errors import ConfigError, ShortsBotError
 from .formatting import format_duration, format_size
 from .logging_setup import setup_logging
-from .selectors import CLIPS_FILENAME, load_selector
 from .state import State
 
 log = logging.getLogger("shortsbot")
@@ -122,6 +120,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="clip index from 'select' (default: 0, the best clip)",
     )
     render_cmd.set_defaults(func=_cmd_render)
+
+    run_cmd = subparsers.add_parser(
+        "run",
+        help="download, transcribe, select and render in one command",
+    )
+    run_cmd.add_argument(
+        "source", help="YouTube URL or path to a local video"
+    )
+    run_cmd.add_argument(
+        "--clips",
+        type=int,
+        default=None,
+        metavar="N",
+        help="number of clips (default: selection.max_clips)",
+    )
+    clean_group = run_cmd.add_mutually_exclusive_group()
+    clean_group.add_argument(
+        "--clean",
+        dest="clean",
+        action="store_true",
+        help=(
+            "delete the downloaded source video and audio from temp "
+            "after a fully successful run"
+        ),
+    )
+    clean_group.add_argument(
+        "--keep-temp",
+        dest="clean",
+        action="store_false",
+        help="keep source video and audio in temp (default)",
+    )
+    run_cmd.set_defaults(func=_cmd_run, clean=False)
 
     return parser
 
@@ -232,37 +262,8 @@ def _cmd_select(args: argparse.Namespace, cfg: Config) -> int:
         raise ConfigError("--top must be at least 1")
 
     state = State.load(cfg, args.video_id)
-    state.require("transcribe")
-    transcript = transcribe.load_transcript(state)
-
-    selection = cfg.selection
-    if args.top is not None:
-        selection = replace(selection, max_clips=args.top)
-
-    outcome = load_selector(selection.selector).select(transcript, selection)
-
-    clips_path = state.workdir / CLIPS_FILENAME
-    jsonio.write_json(
-        clips_path,
-        {
-            "selector": selection.selector,
-            "settings": {
-                "min_seconds": selection.min_seconds,
-                "max_seconds": selection.max_seconds,
-                "max_clips": selection.max_clips,
-            },
-            "reason": outcome.reason,
-            "clips": [clip.to_dict() for clip in outcome.clips],
-        },
-    )
-    state.mark_done(
-        "select",
-        path=str(clips_path),
-        clips=len(outcome.clips),
-        selector=selection.selector,
-    )
-
-    _print_clips(state, outcome, selection, clips_path, cfg)
+    result = selection.select_clips(cfg, state, max_clips=args.top)
+    _print_clips(state, result.outcome, result.selection, result.path, cfg)
     return 0
 
 
@@ -359,6 +360,60 @@ def _cmd_render(args: argparse.Namespace, cfg: Config) -> int:
         f"duration {info.duration:.2f}s (clip {clip.duration:.2f}s)"
     )
     return 0
+
+
+def _cmd_run(args: argparse.Namespace, cfg: Config) -> int:
+    if args.clips is not None and args.clips < 1:
+        raise ConfigError("--clips must be at least 1")
+
+    result = pipeline.run_pipeline(
+        cfg,
+        args.source,
+        max_clips=args.clips,
+        clean=args.clean,
+    )
+    source = result.source
+    successes = result.successes
+    failures = result.failures
+
+    print()
+    print(source.title)
+    print(f"  video id  {result.state.video_id}")
+    print(f"  selected  {len(result.clips)} clip(s)")
+
+    if result.clips:
+        print()
+        print("  Results:")
+        for item in result.clips:
+            if item.result is not None:
+                cached = " (cached)" if item.result.cached else ""
+                print(
+                    f"    #{item.clip.index}  "
+                    f"{_display_path(item.result.output, cfg)}  "
+                    f"{format_duration(item.result.info.duration)}{cached}"
+                )
+            else:
+                reason = item.error.splitlines()[0] if item.error else "unknown error"
+                print(f"    #{item.clip.index}  FAILED  {reason}")
+    else:
+        print()
+        print(f"  No clips were selected: {result.selection.outcome.reason}.")
+
+    if result.removed:
+        print()
+        print("  Cleaned from temp:")
+        for path, size in result.removed:
+            print(f"    {_display_path(path, cfg)} ({format_size(size)})")
+    elif args.clean and failures:
+        print()
+        print("  Temp kept because some clips failed to render.")
+    elif args.clean and not result.clips:
+        print()
+        print("  Temp kept because no clips were rendered.")
+
+    print()
+    print(f"  {len(successes)} rendered, {len(failures)} failed")
+    return result.return_code
 
 
 def _fmt_timestamp(seconds: float) -> str:

@@ -31,6 +31,11 @@ with burned-in word-level captions. Free, local, CPU-only, no paid APIs.
 - Clip picking sits behind a `Selector` protocol (`selection.selector`) so an
   LLM can replace the heuristic without touching the pipeline.
 - Cut + vertical + captions are **one** ffmpeg pass (one encode, not three).
+- `run` orchestrates download → transcribe → select → render. **Temp files are
+  kept by default**; `--clean` deletes only the downloaded `source.mp4` and
+  `audio.wav` inside `temp/<id>/`, never a local input file.
+- Renders are cached per clip with a settings signature. Re-running `run`
+  reuses a valid MP4; changing render/caption settings invalidates that clip.
 - **Source videos are cached in `temp/<video_id>/`**, not `downloads/`.
   `paths.downloads` is therefore currently unused (it is still created and
   gitignored).
@@ -49,13 +54,16 @@ the CLI never advertises something that does not work.
 ```
 temp/<video_id>/
   state.json       # stage status + source metadata + cached paths
-  source.mp4       # downloaded (local files are referenced, not copied)
-  audio.wav        # 16 kHz mono PCM s16le
+  source.mp4       # downloaded copy (deleted by --clean; local inputs not copied)
+  audio.wav        # 16 kHz mono PCM s16le (deleted by --clean)
   transcript.json  # Transcript.to_dict(): language, duration, segments[], words[]
   clips.json       # selection output: selector, settings, reason, clips[]
   captions/
     clip_00.ass    # burned-in captions for clip rank 0 (one per rendered clip)
 ```
+
+`state.json` also holds `data.render_cache` (per-clip settings signature and
+output path) and `data.cleaned` (files removed by `--clean`).
 
 `<video_id>` = first 10 hex chars of sha1 of the normalized source
 (URL string, or absolute path for local files). Same input -> same folder ->
@@ -70,7 +78,7 @@ cache hit.
 | 2 | Transcribe (faster-whisper, word-level) | `transcribe.py`, `jsonio.py` | **done** |
 | 3 | Clip selection | `selectors/base.py`, `selectors/heuristic.py`, `selectors/__init__.py` | **done** |
 | 4 | Render (cut + 9:16 + captions) | `captions.py`, `render.py` | **done** |
-| 5 | Batch / end-to-end | `pipeline.py` | **todo** |
+| 5 | Batch / end-to-end | `pipeline.py`, `selection.py` | **done** |
 
 ## Run commands
 
@@ -84,7 +92,20 @@ venv\Scripts\python.exe main.py transcribe <video_id> --preview 3
 venv\Scripts\python.exe main.py transcribe <video_id> --force
 venv\Scripts\python.exe main.py select <video_id> --top 3
 venv\Scripts\python.exe main.py render <video_id> --clip 0
+venv\Scripts\python.exe main.py run "<url-or-path>" --clips 3
+venv\Scripts\python.exe main.py run "<url-or-path>" --clips 3 --clean
 ```
+
+`run` is the one-command path: it resolves the source, extracts audio,
+transcribes (cached), selects, then renders every selected clip. It logs
+`[1/4]` … `[4/4]` progress lines and finishes with a summary listing each
+output and its container duration. Per-clip render errors are logged and the
+remaining clips still run; any failed clip makes the command exit `1`. A run
+that selects 0 clips exits `0` and explains why.
+
+`--clean` deletes `source.mp4` and `audio.wav` after a fully successful run.
+`--keep-temp` is the default. A later run automatically re-downloads/re-extracts
+missing files; the transcript and rendered MP4s stay cached.
 
 `select` needs a finished transcript. `--top N` overrides
 `selection.max_clips` for that run; clips are printed **best score first**
@@ -138,11 +159,8 @@ INFO  transcribed 0:19 of audio in 3.0s (RTF 0.16, 6.3x realtime)
 
 RTF = processing seconds / audio seconds. Below 1.0 is faster than realtime.
 
-Planned (not built yet):
-
-```
-python main.py run <url-or-path> [--clips N]
-```
+All planned stages are built. The CLI exposes `check-env`, `download`,
+`transcribe`, `select`, `render`, and `run`.
 
 ## Module notes (for the next session)
 
@@ -178,6 +196,10 @@ python main.py run <url-or-path> [--clips N]
   output. Model is freed with `del` + `gc.collect()` after use.
   `load_transcript(state) -> Transcript` reads the cache and raises a clear
   `StageError` telling you to run `transcribe` if it is missing.
+- `selection.py` — `select_clips(cfg, state, max_clips=None) ->
+  SelectionResult(outcome, selection, path)`. Shared by `main.py select` and
+  `main.py run`. Requires `transcribe`, overwrites `clips.json`, records the
+  `select` stage, and returns the effective settings for printing.
 - `selectors/base.py` — `Selector` protocol:
   `select(transcript, cfg) -> SelectionOutcome(clips, reason)`. The reason is
   how an empty result explains itself.
@@ -209,6 +231,19 @@ python main.py run <url-or-path> [--clips N]
   `aac` + `+faststart`. It then `probe()`s the output and refuses success
   unless resolution, audio, and duration are correct. Output name is
   `<title-slug>_<video_id>_clip<rank+1>_<crop_mode>.mp4`.
+  `cached_render(cfg, state, index)` returns an existing MP4 only when its
+  stored signature (clip bounds/text + render + caption settings) still matches and
+  ffprobe verification passes; otherwise it returns `None` so the caller
+  re-renders. `render_clip` always renders fresh.
+- `pipeline.py` — `run_pipeline(cfg, source, max_clips=None, clean=False) ->
+  RunResult`. Calls the same stage modules as the individual commands, so
+  download/transcribe/render caches apply. Per-clip render exceptions are
+  caught and recorded, never aborting the batch. `RunResult.successes`,
+  `.failures`, and `.return_code` drive the CLI summary and exit code.
+  `_clean_temp()` only deletes candidates that resolve inside the work folder,
+  so a local input video is never removed.
+- `README.md` — user-facing setup, one-command usage, per-stage commands, and
+  the config table. Keep it short; deep details belong in this file.
 - `tests/test_captions.py` — 8 stdlib tests for chunk sizes, punctuation,
   orphan merging, clip-relative timing, boundary trimming, style values, and
   markup escaping. Run with
@@ -275,10 +310,31 @@ python main.py run <url-or-path> [--clips N]
     crop mode). Changing `render.crop_mode` produces a second file with the
     other mode in its name. `captions/clip_<index>.ass` is regenerated each
     render, so caption config changes need no cache handling.
+15. **`run` reuses renders per clip.** `state.json` stores a `render_cache`
+    entry per clip index with a signature of the clip bounds plus render and
+    caption settings. A cached MP4 is reused only if the file still exists and
+    ffprobe verification passes. Changing any of those settings, or deleting
+    the MP4, re-renders just that clip. `render` (the single-clip command)
+    always renders fresh.
+16. **`--clean` only fires after every selected clip succeeds.** A partial
+    failure keeps `source.mp4` and `audio.wav` so the next `run` can retry; the
+    successful clips are reused and only the failed ones render again. Zero
+    selected clips exits `0` (nothing failed) but also keeps temp. Only paths
+    that resolve inside `temp/<id>/` are deleted, so passing a local video
+    never risks the original file.
+17. **End-to-end timings** on this CPU with the looped 1:54 fixture and
+    `--clips 3`: first run 20.4 s total (three renders); fully cached rerun
+    0.9 s. `--clean` removed 3.0 MB `source.mp4` + 3.5 MB `audio.wav`.
 
 ## Next action
 
-Stage 4 is committed and awaiting the user's test. **Do not start Stage 5
-until the user confirms.** Next up: `pipeline.py` — download → audio →
-transcribe → select → render with per-clip failure isolation and a summary
-table, plus `main.py run <url-or-path> [--clips N]`.
+All five planned stages are built, and Stage 5 is committed and awaiting the
+user's test. Do not start new work until the user confirms.
+
+Natural next steps once confirmed:
+
+- Run one real long YouTube video end-to-end and judge the heuristic clips.
+- Flip `transcription.model_size` from `base` to `small` for real use.
+- Implement an LLM selector behind `selectors/base.py` if the heuristic picks
+  are not good enough; register it in `selectors/__init__.py` and set
+  `selection.selector` in `config.yaml`.
