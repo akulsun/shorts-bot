@@ -7,6 +7,18 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+pip-wheel-metadata/
+
+# --- IDEs & Editors ---
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- Operating System ---
+.DS_Store
+Thumbs.db
+desktop.ini
 
 # --- App data (never commit media) ---
 /output/
@@ -24,6 +36,9 @@ __pycache__/
 *.srt
 *.vtt
 *.ass
+
+# --- Logs ---
+*.log
 
 # --- Model caches ---
 models/
