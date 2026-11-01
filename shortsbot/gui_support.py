@@ -310,17 +310,14 @@ def open_folder(path: Path | str) -> None:
     """Open the folder containing the file, selecting the file on Windows if possible."""
     target = Path(path).resolve()
     if sys.platform == "win32":
-        target_str = str(target)
-        if "," not in target_str:
-            try:
-                subprocess.Popen(["explorer", f"/select,{target}"])
-                return
-            except Exception:
-                pass
         try:
-            os.startfile(str(target.parent))
+            subprocess.Popen(["explorer", f'/select,"{target}"'])
             return
         except Exception:
+            try:
+                os.startfile(str(target.parent))
+            except Exception:
+                pass
             return
     if sys.platform == "darwin":
         subprocess.run(["open", "-R", str(target)], check=False)

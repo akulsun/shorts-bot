@@ -15,7 +15,7 @@ from pathlib import Path
 from . import audio, checks, download, pipeline, render, selection, transcribe
 from .config import Config, ensure_directories, load_config
 from .errors import ConfigError, ShortsBotError
-from .formatting import format_duration, format_size
+from .formatting import format_duration, format_size, strip_ansi
 from .logging_setup import setup_logging
 from .state import State
 
@@ -209,7 +209,7 @@ def _cmd_download(args: argparse.Namespace, cfg: Config) -> int:
 
     origin = "local file" if source.is_local else "YouTube"
     print()
-    print(source.title)
+    print(strip_ansi(source.title))
     print(f"  video id  {state.video_id}")
     print(
         f"  source    {_display_path(source.path, cfg)} "
@@ -232,7 +232,7 @@ def _cmd_transcribe(args: argparse.Namespace, cfg: Config) -> int:
     word_count = sum(len(segment.words) for segment in transcript.segments)
 
     print()
-    print(title)
+    print(strip_ansi(title))
     print(f"  language  {transcript.language or 'unknown'}")
     print(f"  duration  {format_duration(transcript.duration)}")
     print(f"  segments  {len(transcript.segments)}")
@@ -283,7 +283,7 @@ def _print_clips(
     title = str(info.get("title") or state.video_id)
 
     print()
-    print(title)
+    print(strip_ansi(title))
     print(
         f"  selector  {selection.selector}  "
         f"({selection.min_seconds:.0f}-{selection.max_seconds:.0f}s, "
@@ -340,7 +340,7 @@ def _cmd_render(args: argparse.Namespace, cfg: Config) -> int:
     size = result.output.stat().st_size if result.output.exists() else 0
 
     print()
-    print(title)
+    print(strip_ansi(title))
     print(
         f"  clip      #{clip.index}  "
         f"[{_fmt_timestamp(clip.start)} -> {_fmt_timestamp(clip.end)}]  "
@@ -382,7 +382,7 @@ def _cmd_run(args: argparse.Namespace, cfg: Config) -> int:
     failures = result.failures
 
     print()
-    print(source.title)
+    print(strip_ansi(source.title))
     print(f"  video id  {result.state.video_id}")
     print(f"  selected  {len(result.clips)} clip(s)")
 

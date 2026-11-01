@@ -65,9 +65,9 @@ class State:
         cls, cfg: Config, video_id: str, *, source: str | None = None
     ) -> "State":
         vid = str(video_id or "").strip()
-        if not re.match(r"^[a-fA-F0-9]{10}$", vid):
+        if not re.match(r"^[A-Za-z0-9_-]+$", vid):
             raise StageError(
-                f"invalid video id '{video_id}': expected 10 hexadecimal characters"
+                f"invalid video id '{video_id}': must match ^[A-Za-z0-9_-]+$"
             )
         temp_dir = cfg.paths.temp.resolve()
         workdir = (temp_dir / vid).resolve()

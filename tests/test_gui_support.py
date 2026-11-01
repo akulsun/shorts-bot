@@ -380,7 +380,8 @@ class ResultsTests(unittest.TestCase):
 
     def test_open_file_and_open_folder(self):
         with tempfile.TemporaryDirectory() as folder:
-            clip = Path(folder) / "test.mp4"
+            clip = Path(folder) / "test dir, with comma" / "clip, name with space.mp4"
+            clip.parent.mkdir(parents=True, exist_ok=True)
             clip.write_bytes(b"123")
 
             with patch("os.startfile", create=True) as mock_startfile:
@@ -389,10 +390,9 @@ class ResultsTests(unittest.TestCase):
 
             with patch("subprocess.Popen") as mock_popen:
                 open_folder(clip)
-                mock_popen.assert_called_once()
-                args = mock_popen.call_args[0][0]
-                self.assertEqual(args[0], "explorer")
-                self.assertIn(f"/select,{clip.resolve()}", args[1])
+                mock_popen.assert_called_once_with(
+                    ["explorer", f'/select,"{clip.resolve()}"']
+                )
 
 
 if __name__ == "__main__":

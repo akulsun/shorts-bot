@@ -3,6 +3,18 @@
 from __future__ import annotations
 
 
+import re
+
+_ANSI_OR_CONTROL_RE = re.compile(
+    r"\x1b\][^\x07\x1b]*(\x07|\x1b\\)|(?:\x1B[@-Z\\-_]|[\x80-\x9A\x9C-\x9F]|(?:\x1B\[|\x9B)[0-?]*[ -/]*[@-~]|[\x00-\x1F\x7F-\x9F])"
+)
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences and non-printable control characters."""
+    return _ANSI_OR_CONTROL_RE.sub("", str(text or "")).strip()
+
+
 def format_duration(seconds: float) -> str:
     """Seconds -> 'm:ss' or 'h:mm:ss'."""
     total = int(round(max(0.0, seconds)))

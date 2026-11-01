@@ -18,7 +18,7 @@ from typing import Any
 from .config import Config
 from .errors import CancelledError, DependencyError, DownloadError, FFmpegError
 from .ffmpeg import probe
-from .formatting import format_duration
+from .formatting import format_duration, strip_ansi
 from .state import State
 
 log = logging.getLogger(__name__)
@@ -183,16 +183,17 @@ def _read_local(_cfg: Config, state: State) -> SourceInfo:
         )
     if media.duration <= 0:
         raise DownloadError(f"{path.name} reports a zero duration; the file looks broken")
-    if media.duration > MAX_SOURCE_DURATION:
+    max_duration = getattr(getattr(_cfg, "download", None), "max_duration", 7200.0)
+    if media.duration > max_duration:
         raise DownloadError(
             f"{path.name} duration ({format_duration(media.duration)}) exceeds "
-            f"the maximum allowed limit of {format_duration(MAX_SOURCE_DURATION)}"
+            f"the maximum allowed limit of {format_duration(max_duration)}"
         )
 
     log.info("using local file: %s", path)
     return SourceInfo(
         video_id=state.video_id,
-        title=path.stem,
+        title=strip_ansi(path.stem) or path.stem,
         path=path,
         duration=media.duration,
         width=media.width,
@@ -219,14 +220,27 @@ def _download_url(
 
     log.info("fetching %s", state.source)
     options = _ydl_options(cfg, dest, on_progress=on_progress, cancel_event=cancel_event)
+    max_duration = getattr(getattr(cfg, "download", None), "max_duration", 7200.0)
     try:
         _check_cancel(cancel_event)
         with yt_dlp.YoutubeDL(options) as ydl:
+            # Validate stream status and duration before downloading
+            meta = ydl.extract_info(state.source, download=False)
+            if not isinstance(meta, dict):
+                raise DownloadError("yt-dlp returned no information for this URL")
+            if meta.get("is_live") or meta.get("live_status") == "is_live":
+                raise DownloadError("live streams are not supported")
+            duration_meta = float(meta.get("duration") or 0.0)
+            if duration_meta > max_duration:
+                raise DownloadError(
+                    f"video duration ({format_duration(duration_meta)}) exceeds "
+                    f"the maximum allowed limit of {format_duration(max_duration)}"
+                )
+
+            _check_cancel(cancel_event)
             info = ydl.extract_info(state.source, download=True)
             if not isinstance(info, dict):
                 raise DownloadError("yt-dlp returned no information for this URL")
-            if info.get("is_live"):
-                raise DownloadError("live streams are not supported")
             path = _final_path(ydl, info, dest)
         _check_cancel(cancel_event)
     except yt_dlp.utils.DownloadError as exc:
@@ -246,14 +260,14 @@ def _download_url(
         )
 
     duration = media.duration or float(info.get("duration") or 0.0)
-    if duration > MAX_SOURCE_DURATION:
+    if duration > max_duration:
         raise DownloadError(
             f"video duration ({format_duration(duration)}) exceeds "
-            f"the maximum allowed limit of {format_duration(MAX_SOURCE_DURATION)}"
+            f"the maximum allowed limit of {format_duration(max_duration)}"
         )
 
     raw_title = str(info.get("title") or path.stem)
-    title = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", raw_title).strip() or path.stem
+    title = strip_ansi(raw_title) or path.stem
     log.info("downloaded '%s' (%s)", title, format_duration(media.duration))
     return SourceInfo(
         video_id=state.video_id,
