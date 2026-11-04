@@ -123,7 +123,102 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(applied.selection.max_clips, 3)
         self.assertEqual(applied.transcription.model_size, "base")
         self.assertEqual(applied.render.crop_mode, "blur_pad")
+        self.assertTrue(applied.captions.enabled)
         self.assertEqual(self.cfg.selection.max_clips, 3)
+
+    def test_captions_toggle_from_config_and_apply(self):
+        self.path.write_text(CONFIG_TEXT + "\ncaptions:\n  enabled: false\n", encoding="utf-8")
+        cfg_disabled = load_config(self.path)
+        settings = GuiSettings.from_config(cfg_disabled)
+        self.assertFalse(settings.captions_enabled)
+        self.assertFalse(settings.captions)
+
+        # Apply True toggled
+        toggled = GuiSettings(
+            max_clips=settings.max_clips,
+            model_size=settings.model_size,
+            crop_mode=settings.crop_mode,
+            min_seconds=settings.min_seconds,
+            max_seconds=settings.max_seconds,
+            captions_enabled=True,
+        )
+        applied = toggled.apply(cfg_disabled)
+        self.assertTrue(applied.captions.enabled)
+        self.assertFalse(cfg_disabled.captions.enabled)
+
+    def test_form_accepts_captions_values(self):
+        for val, expected in [
+            (True, True),
+            (False, False),
+            ("true", True),
+            ("false", False),
+            ("True", True),
+            ("False", False),
+            ("yes", True),
+            ("no", False),
+            ("on", True),
+            ("off", False),
+            ("1", True),
+            ("0", False),
+            (1, True),
+            (0, False),
+        ]:
+            settings = GuiSettings.from_form(
+                max_clips="3",
+                model_size="base",
+                crop_mode="blur_pad",
+                min_seconds="20",
+                max_seconds="60",
+                captions_enabled=val,
+            )
+            self.assertEqual(settings.captions_enabled, expected)
+
+        # Omitted captions_enabled defaults to True
+        default_settings = GuiSettings.from_form(
+            max_clips="3",
+            model_size="base",
+            crop_mode="blur_pad",
+            min_seconds="20",
+            max_seconds="60",
+        )
+        self.assertTrue(default_settings.captions_enabled)
+
+        # Keyword alias 'captions' is also accepted
+        alias_settings = GuiSettings.from_form(
+            max_clips="3",
+            model_size="base",
+            crop_mode="blur_pad",
+            min_seconds="20",
+            max_seconds="60",
+            captions=False,
+        )
+        self.assertFalse(alias_settings.captions_enabled)
+
+    def test_form_rejects_bad_captions_value(self):
+        with self.assertRaises(ConfigError):
+            GuiSettings.from_form(
+                max_clips="3",
+                model_size="base",
+                crop_mode="blur_pad",
+                min_seconds="20",
+                max_seconds="60",
+                captions_enabled="maybe",
+            )
+
+    def test_save_settings_persists_captions_toggle(self):
+        settings = GuiSettings(
+            max_clips=3,
+            model_size="base",
+            crop_mode="blur_pad",
+            min_seconds=20.0,
+            max_seconds=60.0,
+            captions_enabled=False,
+        )
+        new_cfg = save_settings(settings, self.cfg)
+        self.assertFalse(new_cfg.captions.enabled)
+
+        reloaded = load_config(self.path)
+        self.assertFalse(reloaded.captions.enabled)
 
     def test_form_rejects_bad_values(self):
         with self.assertRaises(ConfigError):

@@ -123,6 +123,7 @@ class ShortsBotApp(ctk.CTk):
         self.crop_var = tk.StringVar()
         self.min_var = tk.StringVar()
         self.max_var = tk.StringVar()
+        self.captions_var = tk.BooleanVar(value=True)
 
         ctk.CTkLabel(settings, text="Clips", anchor="w").grid(
             row=1, column=0, sticky="w", padx=(12, 4), pady=4
@@ -184,6 +185,21 @@ class ShortsBotApp(ctk.CTk):
         self.max_entry.grid(
             row=2, column=3, sticky="w", padx=(0, 14), pady=(0, 10)
         )
+        self.captions_switch = ctk.CTkSwitch(
+            settings,
+            text="Captions",
+            variable=self.captions_var,
+            onvalue=True,
+            offvalue=False,
+        )
+        self.captions_switch.grid(
+            row=2,
+            column=4,
+            columnspan=2,
+            sticky="w",
+            padx=(0, 8),
+            pady=(0, 10),
+        )
         ctk.CTkLabel(
             settings,
             text="20-60 s is the usual clip range.",
@@ -191,10 +207,9 @@ class ShortsBotApp(ctk.CTk):
             anchor="w",
         ).grid(
             row=2,
-            column=4,
-            columnspan=2,
+            column=6,
             sticky="w",
-            padx=(0, 8),
+            padx=(10, 8),
             pady=(0, 10),
         )
 
@@ -385,6 +400,7 @@ class ShortsBotApp(ctk.CTk):
         self.crop_var.set(settings.crop_mode)
         self.min_var.set(f"{settings.min_seconds:g}")
         self.max_var.set(f"{settings.max_seconds:g}")
+        self.captions_var.set(settings.captions_enabled)
         values = self._model_values()
         self.model_combo.configure(values=values)
 
@@ -395,6 +411,7 @@ class ShortsBotApp(ctk.CTk):
             crop_mode=self.crop_var.get(),
             min_seconds=self.min_var.get(),
             max_seconds=self.max_var.get(),
+            captions_enabled=bool(self.captions_var.get()),
         )
 
     def _on_save(self) -> None:
@@ -452,10 +469,11 @@ class ShortsBotApp(ctk.CTk):
         self.results_label.configure(text="Running...")
         log.info("starting job: %s", source)
         log.info(
-            "run settings: clips=%d, model=%s, crop=%s, range=%g-%gs",
+            "run settings: clips=%d, model=%s, crop=%s, captions=%s, range=%g-%gs",
             settings.max_clips,
             settings.model_size,
             settings.crop_mode,
+            "on" if settings.captions_enabled else "off",
             settings.min_seconds,
             settings.max_seconds,
         )
@@ -608,6 +626,7 @@ class ShortsBotApp(ctk.CTk):
         self.crop_combo.configure(state="disabled" if running else "readonly")
         self.min_entry.configure(state=state)
         self.max_entry.configure(state=state)
+        self.captions_switch.configure(state=state)
         self.save_button.configure(state=state)
         self.start_button.configure(state="disabled" if running else "normal")
         self.cancel_button.configure(state="normal" if running else "disabled")

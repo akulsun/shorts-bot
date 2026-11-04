@@ -99,6 +99,11 @@ class GuiSettings:
     crop_mode: str
     min_seconds: float
     max_seconds: float
+    captions_enabled: bool = True
+
+    @property
+    def captions(self) -> bool:
+        return self.captions_enabled
 
     @classmethod
     def from_config(cls, cfg: Config) -> "GuiSettings":
@@ -108,6 +113,7 @@ class GuiSettings:
             crop_mode=cfg.render.crop_mode,
             min_seconds=cfg.selection.min_seconds,
             max_seconds=cfg.selection.max_seconds,
+            captions_enabled=cfg.captions.enabled,
         )
 
     @classmethod
@@ -119,13 +125,21 @@ class GuiSettings:
         crop_mode: str,
         min_seconds: str,
         max_seconds: str,
+        captions_enabled: bool | str | None = None,
+        captions: bool | str | None = None,
     ) -> "GuiSettings":
+        if captions_enabled is None and captions is not None:
+            captions_enabled = captions
+        if captions_enabled is None:
+            captions_enabled = True
+
         settings = cls(
             max_clips=_whole_number(max_clips, "Clips"),
             model_size=str(model_size).strip(),
             crop_mode=str(crop_mode).strip(),
             min_seconds=_number(min_seconds, "Min seconds"),
             max_seconds=_number(max_seconds, "Max seconds"),
+            captions_enabled=_boolean(captions_enabled, "Captions"),
         )
         settings.validate()
         return settings
@@ -149,6 +163,8 @@ class GuiSettings:
             raise ConfigError(
                 "Min seconds must be smaller than Max seconds."
             )
+        if not isinstance(self.captions_enabled, bool):
+            raise ConfigError("Captions must be true or false.")
 
     def apply(self, cfg: Config) -> Config:
         """Return an in-memory Config for this run; nothing is written."""
@@ -164,6 +180,7 @@ class GuiSettings:
                 cfg.transcription, model_size=self.model_size
             ),
             render=replace(cfg.render, crop_mode=self.crop_mode),
+            captions=replace(cfg.captions, enabled=self.captions_enabled),
         )
 
     def as_updates(self) -> dict[str, Any]:
@@ -173,11 +190,12 @@ class GuiSettings:
             "selection.max_seconds": self.max_seconds,
             "transcription.model_size": self.model_size,
             "render.crop_mode": self.crop_mode,
+            "captions.enabled": self.captions_enabled,
         }
 
 
 def save_settings(settings: GuiSettings, cfg: Config) -> Config:
-    """Validate, then atomically write the five GUI-controlled settings."""
+    """Validate, then atomically write the GUI-controlled settings."""
     settings.validate()
     return save_config_values(cfg.config_path, settings.as_updates())
 
@@ -345,3 +363,16 @@ def _number(value: str, label: str) -> float:
     if not math.isfinite(number):
         raise ConfigError(f"{label} must be a finite number.")
     return number
+
+
+def _boolean(value: Any, label: str = "Captions") -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off"):
+        return False
+    raise ConfigError(f"{label} must be true or false.")
