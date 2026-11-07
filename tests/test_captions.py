@@ -53,7 +53,7 @@ def make_transcript(specs, start: float = 0.0) -> Transcript:
     return Transcript("en", words[-1].end, (segment,))
 
 
-def clip_for(transcript: Transcript, start: float, end: float) -> Clip:
+def clip_for(_transcript: Transcript, start: float, end: float) -> Clip:
     return Clip(index=0, start=start, end=end, score=1.0, text="")
 
 

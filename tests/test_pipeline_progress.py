@@ -73,7 +73,7 @@ class PipelineProgressTests(unittest.TestCase):
                 "shortsbot.pipeline.download.resolve_source",
                 side_effect=fake_download,
             ),
-            patch("shortsbot.pipeline.audio.extract_audio") as audio,
+            patch("shortsbot.pipeline.audio.extract_audio"),
             patch(
                 "shortsbot.pipeline.transcribe.transcribe",
                 side_effect=fake_transcribe,
@@ -177,7 +177,7 @@ class PipelineProgressTests(unittest.TestCase):
         clips = (make_clip(0), make_clip(1))
         event = threading.Event()
 
-        def cancel_on_first_clip(_cfg, _state, index, *, cancel_event=None):
+        def cancel_on_first_clip(_cfg, _state, _index, *, cancel_event=None):
             event.set()
             raise CancelledError("render cancelled")
 

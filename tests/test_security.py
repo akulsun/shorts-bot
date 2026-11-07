@@ -312,7 +312,7 @@ class SecurityRegressionTests(unittest.TestCase):
         mock_res = MagicMock(returncode=0, stdout="deno 2.1.0\n")
         with patch("shutil.which", return_value="C:\\bin\\deno.exe"), \
              patch("subprocess.run", return_value=mock_res):
-            status, detail, hint = _check_deno(cfg)
+            status, detail, _ = _check_deno(cfg)
             self.assertTrue(status is True or status == "OK")
             self.assertIn("deno 2.1.0", detail)
 

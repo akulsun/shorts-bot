@@ -20,7 +20,7 @@ class HeatmapTests(unittest.TestCase):
 
     def test_missing_heatmap_file_returns_none(self):
         self.assertIsNone(load_heatmap(self.tmp_path))
-        peak, avg, score = score_heatmap_window(None, 0.0, 30.0)
+        _, _, score = score_heatmap_window(None, 0.0, 30.0)
         self.assertEqual(score, 0.5)
 
     def test_load_and_score_heatmap(self):

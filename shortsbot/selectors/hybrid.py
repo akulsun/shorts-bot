@@ -5,10 +5,8 @@ sentence boundary snapping, and linguistic viral signals.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
 from ..audio_analysis import AudioEnergyProfile, analyze_audio_energy
@@ -185,7 +183,6 @@ class HybridSelector:
         candidates = [
             _score_candidate(
                 segments[start_idx : end_idx + 1],
-                transcript,
                 cfg,
                 audio_profile,
                 heatmap,
@@ -248,7 +245,6 @@ def _legal_windows(
 
 def _score_candidate(
     segments: list[Segment],
-    transcript: Transcript,
     cfg: SelectionConfig,
     audio_profile: AudioEnergyProfile | None,
     heatmap: list[dict] | None,
@@ -268,7 +264,7 @@ def _score_candidate(
     keywords_norm = _clamp(hits / _KEYWORD_SATURATION)
 
     # Viral hook score (first 4 seconds / first sentence)
-    hook = _viral_hook_score(text, segments)
+    hook = _viral_hook_score(text)
 
     # Sentence & thought completeness score
     completeness = _completeness_score(segments)
@@ -305,7 +301,7 @@ def _score_candidate(
     }
     score = sum(components.values())
 
-    reason = _format_reason(components, hits, hook, audio_score, peak_ratio, heatmap_score)
+    reason = _format_reason(hits, hook, audio_score, peak_ratio, heatmap_score)
 
     return _CandidateWindow(
         start=start,
@@ -335,7 +331,7 @@ def _keyword_hits(text: str, keywords: tuple[str, ...]) -> int:
     return hits
 
 
-def _viral_hook_score(text: str, segments: list[Segment]) -> float:
+def _viral_hook_score(text: str) -> float:
     if not text:
         return 0.0
 
@@ -413,7 +409,6 @@ def _silence_penalty(words: Sequence[Word], start: float, end: float) -> float:
 
 
 def _format_reason(
-    components: dict[str, float],
     hits: int,
     hook: float,
     audio_score: float,

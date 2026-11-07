@@ -9,6 +9,7 @@ from __future__ import annotations
 import gc
 import importlib
 import shutil
+import subprocess
 import time
 from typing import Callable
 
@@ -124,8 +125,6 @@ def _check_deno(_cfg: Config) -> tuple[str | bool, str, str]:
         )
     version = ""
     try:
-        import subprocess
-
         res = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=5)
         if res.returncode == 0:
             version = res.stdout.splitlines()[0].strip()

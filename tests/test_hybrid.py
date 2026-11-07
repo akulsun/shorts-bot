@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import tempfile
 import unittest
-from pathlib import Path
+from unittest.mock import patch
 
-from shortsbot import jsonio
 from shortsbot.config import SelectionConfig, SelectionWeights
 from shortsbot.models import Segment, Transcript, Word
 from shortsbot.selectors import load_selector
@@ -52,6 +50,13 @@ def make_transcript(specs, *, gap: float = 0.0) -> Transcript:
 
 
 class HybridSelectorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._patcher = patch("shortsbot.selectors.gemini.resolve_api_key", return_value=None)
+        self._patcher.start()
+
+    def tearDown(self) -> None:
+        self._patcher.stop()
+
     def test_hook_and_viral_openers_boost_score(self):
         weak = make_transcript(
             [
@@ -97,23 +102,27 @@ class HybridSelectorTests(unittest.TestCase):
 
     def test_resolve_api_key_handles_direct_and_pasted_keys(self):
         import os
-        from shortsbot.selectors.gemini import resolve_api_key
-
-        # Direct api_key
-        cfg1 = make_config(api_key="AIzaSyDirectKey123")
-        self.assertEqual(resolve_api_key(cfg1), "AIzaSyDirectKey123")
-
-        # Pasted into llm_api_key_env
-        cfg2 = make_config(api_key=None, llm_api_key_env="AIzaSyPastedKey456")
-        self.assertEqual(resolve_api_key(cfg2), "AIzaSyPastedKey456")
-
-        # Environment variable
-        os.environ["TEST_GEMINI_KEY"] = "AIzaSyFromEnv789"
+        self._patcher.stop()
         try:
-            cfg3 = make_config(api_key=None, llm_api_key_env="TEST_GEMINI_KEY")
-            self.assertEqual(resolve_api_key(cfg3), "AIzaSyFromEnv789")
+            from shortsbot.selectors.gemini import resolve_api_key
+
+            # Direct api_key
+            cfg1 = make_config(api_key="AIzaSyDirectKey123")
+            self.assertEqual(resolve_api_key(cfg1), "AIzaSyDirectKey123")
+
+            # Pasted into llm_api_key_env
+            cfg2 = make_config(api_key=None, llm_api_key_env="AIzaSyPastedKey456")
+            self.assertEqual(resolve_api_key(cfg2), "AIzaSyPastedKey456")
+
+            # Environment variable
+            os.environ["TEST_GEMINI_KEY"] = "AIzaSyFromEnv789"
+            try:
+                cfg3 = make_config(api_key=None, llm_api_key_env="TEST_GEMINI_KEY")
+                self.assertEqual(resolve_api_key(cfg3), "AIzaSyFromEnv789")
+            finally:
+                os.environ.pop("TEST_GEMINI_KEY", None)
         finally:
-            os.environ.pop("TEST_GEMINI_KEY", None)
+            self._patcher.start()
 
 
 if __name__ == "__main__":

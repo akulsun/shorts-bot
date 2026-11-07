@@ -8,7 +8,7 @@ import unittest
 import wave
 from pathlib import Path
 
-from shortsbot.audio_analysis import AudioEnergyProfile, analyze_audio_energy
+from shortsbot.audio_analysis import analyze_audio_energy
 
 
 class AudioAnalysisTests(unittest.TestCase):
@@ -35,7 +35,7 @@ class AudioAnalysisTests(unittest.TestCase):
     def test_missing_or_empty_file_returns_safe_empty_profile(self):
         profile = analyze_audio_energy(self.tmp_path / "does_not_exist.wav")
         self.assertFalse(profile.has_data)
-        peak_r, avg_r, score = profile.score_window(0.0, 10.0)
+        _, _, score = profile.score_window(0.0, 10.0)
         self.assertEqual(score, 0.5)
 
     def test_audio_energy_detects_volume_surge(self):

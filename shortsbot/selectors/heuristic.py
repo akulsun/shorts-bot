@@ -172,7 +172,7 @@ def _score_window(segments: list[Segment], cfg: SelectionConfig) -> _Window:
         score=round(score, 4),
         components={key: round(value, 4) for key, value in components.items()},
         text=text,
-        reason=_reason(components, hits, hook, density),
+        reason=_reason(hits, hook, density),
     )
 
 
@@ -256,7 +256,7 @@ def _silence_penalty(words, start: float, end: float) -> float:
     return _clamp(dead_air / _SILENCE_BUDGET)
 
 
-def _reason(components: dict[str, float], hits: int, hook: float, density: float) -> str:
+def _reason(hits: int, hook: float, density: float) -> str:
     strengths: list[str] = []
     if hits:
         strengths.append(f"{hits} keyword hit{'s' if hits != 1 else ''}")

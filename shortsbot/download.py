@@ -7,7 +7,6 @@ in temp/<video_id>/state.json, so re-running with the same input is free.
 from __future__ import annotations
 
 import logging
-import re
 import threading
 import urllib.parse
 from collections.abc import Callable
