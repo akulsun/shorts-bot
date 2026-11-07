@@ -41,7 +41,7 @@ selection:
   # LLM settings: Recommended to put GEMINI_API_KEY in .env file (ignored by git).
   # You can also set api_key directly here or via GEMINI_API_KEY environment variable.
   api_key: null
-  llm_model: gemini-3.8-flash
+  llm_model: gemini-3.5-flash-lite
   llm_api_key_env: GEMINI_API_KEY
   keywords:
     - mistake

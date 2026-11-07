@@ -84,10 +84,10 @@ class GeminiSelector:
         if not api_key:
             log.warning(
                 "[select] Gemini API key not found (set 'api_key' in config.yaml or GEMINI_API_KEY env). "
-                "Falling back to hybrid multimodal selector.",
+                "Falling back to local multimodal selector.",
             )
             from .hybrid import HybridSelector
-            return HybridSelector().select(transcript, cfg, state=state)
+            return HybridSelector().select(transcript, cfg, state=state, allow_llm=False)
 
         log.info("[select] Using Gemini LLM (%s) for semantic viral selection", cfg.llm_model)
 
@@ -95,12 +95,12 @@ class GeminiSelector:
             clips = self._query_gemini(transcript, cfg, state, api_key)
             if clips:
                 return SelectionOutcome(tuple(clips))
-            log.warning("Gemini returned no clips; falling back to hybrid selector")
+            log.warning("Gemini returned no clips; falling back to local multimodal selector")
         except Exception as exc:
-            log.warning("Gemini selection encountered an error: %s; falling back", exc)
+            log.warning("Gemini selection encountered an error: %s; falling back to local multimodal selector", exc)
 
         from .hybrid import HybridSelector
-        return HybridSelector().select(transcript, cfg, state=state)
+        return HybridSelector().select(transcript, cfg, state=state, allow_llm=False)
 
     def _query_gemini(
         self,

@@ -120,6 +120,8 @@ class HybridSelector:
         transcript: Transcript,
         cfg: SelectionConfig,
         state: State | None = None,
+        *,
+        allow_llm: bool = True,
     ) -> SelectionOutcome:
         segments = transcript.segments
         duration = transcript.duration or (segments[-1].end if segments else 0.0)
@@ -133,23 +135,41 @@ class HybridSelector:
                 f"but a clip must be at least {cfg.min_seconds:.0f}s",
             )
 
-        # Check if Gemini API key is available for LLM semantic analysis
-        from .gemini import resolve_api_key
-        api_key = resolve_api_key(cfg)
-        if api_key:
-            log.info(
-                "[select] Gemini API key detected -> using Gemini LLM (%s) for semantic viral selection",
-                cfg.llm_model,
-            )
-            try:
-                from .gemini import GeminiSelector
-                return GeminiSelector().select(transcript, cfg, state=state)
-            except Exception as exc:
-                log.warning("Gemini LLM selection failed (%s); falling back to local multimodal engine", exc)
-        else:
-            log.info(
-                "[select] No Gemini API key detected -> using local multimodal engine (audio energy + replay heatmap)"
-            )
+        # Optional LLM attempt if API key is present and allow_llm is True
+        if allow_llm:
+            from .gemini import resolve_api_key
+            api_key = resolve_api_key(cfg)
+            if api_key:
+                log.info(
+                    "[select] Gemini API key detected -> using Gemini LLM (%s) for semantic viral selection",
+                    cfg.llm_model,
+                )
+                try:
+                    from .gemini import GeminiSelector
+                    clips = GeminiSelector()._query_gemini(transcript, cfg, state, api_key)
+                    if clips:
+                        return SelectionOutcome(tuple(clips))
+                    log.warning("Gemini returned no clips; falling back to local multimodal engine")
+                except Exception as exc:
+                    log.warning(
+                        "Gemini selection encountered an error: %s; falling back to local multimodal engine",
+                        exc,
+                    )
+            else:
+                log.info(
+                    "[select] No Gemini API key detected -> using local multimodal engine (audio energy + replay heatmap)"
+                )
+
+        return self._select_local(transcript, cfg, state)
+
+    def _select_local(
+        self,
+        transcript: Transcript,
+        cfg: SelectionConfig,
+        state: State | None = None,
+    ) -> SelectionOutcome:
+        segments = transcript.segments
+        duration = transcript.duration or (segments[-1].end if segments else 0.0)
 
         # 1. Load Audio Energy Profile if enabled and available
         audio_profile = None

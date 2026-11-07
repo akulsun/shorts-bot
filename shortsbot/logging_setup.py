@@ -51,6 +51,8 @@ def setup_logging(level: str = "INFO", log_file: Path | None = None) -> None:
         "httpcore",
         "httpcore2",
         "filelock",
+        "google_genai",
+        "google",
     ):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
