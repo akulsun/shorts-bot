@@ -62,10 +62,15 @@ DEFAULTS: dict[str, Any] = {
         "beam_size": 5,
     },
     "selection": {
-        "selector": "heuristic",
+        "selector": "hybrid",
         "min_seconds": 20,
         "max_seconds": 60,
         "max_clips": 3,
+        "use_audio_energy": True,
+        "use_youtube_heatmap": True,
+        "api_key": None,
+        "llm_model": "gemini-3.8-flash",
+        "llm_api_key_env": "GEMINI_API_KEY",
         "keywords": [
             "mistake",
             "secret",
@@ -89,6 +94,8 @@ DEFAULTS: dict[str, Any] = {
             "completeness": 0.6,
             "filler": 0.5,
             "silence": 0.5,
+            "audio_energy": 1.2,
+            "heatmap": 1.5,
         },
     },
     "render": {
@@ -150,6 +157,8 @@ class SelectionWeights:
     completeness: float
     filler: float
     silence: float
+    audio_energy: float = 1.2
+    heatmap: float = 1.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +169,11 @@ class SelectionConfig:
     max_clips: int
     keywords: tuple[str, ...]
     weights: SelectionWeights
+    use_audio_energy: bool = True
+    use_youtube_heatmap: bool = True
+    api_key: str | None = None
+    llm_model: str = "gemini-3.8-flash"
+    llm_api_key_env: str = "GEMINI_API_KEY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,9 +218,13 @@ class Config:
 
 def load_config(path: str | Path | None = None) -> Config:
     """Read, validate and freeze the configuration."""
+    from .env import load_env_file
+
     config_path = Path(path).expanduser().resolve() if path else DEFAULT_CONFIG_PATH
     if not config_path.exists():
         raise ConfigError(f"config file not found: {config_path}")
+
+    load_env_file(config_path.parent / ".env")
 
     try:
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -517,6 +535,12 @@ def _parse_selection(section: dict[str, Any]) -> SelectionConfig:
         completeness=_float(weights_raw, "completeness", "selection.weights.completeness"),
         filler=_float(weights_raw, "filler", "selection.weights.filler"),
         silence=_float(weights_raw, "silence", "selection.weights.silence"),
+        audio_energy=_float(weights_raw, "audio_energy", "selection.weights.audio_energy")
+        if "audio_energy" in weights_raw
+        else 1.2,
+        heatmap=_float(weights_raw, "heatmap", "selection.weights.heatmap")
+        if "heatmap" in weights_raw
+        else 1.5,
     )
 
     keywords_raw = section["keywords"]
@@ -532,6 +556,21 @@ def _parse_selection(section: dict[str, Any]) -> SelectionConfig:
         max_clips=_int(section, "max_clips", "selection.max_clips"),
         keywords=tuple(k.lower() for k in keywords_raw),
         weights=weights,
+        use_audio_energy=_bool(section, "use_audio_energy", "selection.use_audio_energy")
+        if "use_audio_energy" in section
+        else True,
+        use_youtube_heatmap=_bool(section, "use_youtube_heatmap", "selection.use_youtube_heatmap")
+        if "use_youtube_heatmap" in section
+        else True,
+        api_key=_opt_str(section, "api_key", "selection.api_key")
+        if "api_key" in section
+        else None,
+        llm_model=_str(section, "llm_model", "selection.llm_model")
+        if "llm_model" in section
+        else "gemini-3.8-flash",
+        llm_api_key_env=_str(section, "llm_api_key_env", "selection.llm_api_key_env")
+        if "llm_api_key_env" in section
+        else "GEMINI_API_KEY",
     )
 
 
@@ -579,6 +618,8 @@ def _validate(
         ("completeness", selection.weights.completeness),
         ("filler", selection.weights.filler),
         ("silence", selection.weights.silence),
+        ("audio_energy", selection.weights.audio_energy),
+        ("heatmap", selection.weights.heatmap),
     ):
         if value < 0:
             raise ConfigError(f"selection.weights.{name} must not be negative")

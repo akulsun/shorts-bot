@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from ..config import ConfigError
 from .base import SelectionOutcome, Selector
+from .gemini import GeminiSelector
 from .heuristic import HeuristicSelector
+from .hybrid import HybridSelector
 
 CLIPS_FILENAME = "clips.json"
 
 _REGISTRY: dict[str, type] = {
+    "gemini": GeminiSelector,
     "heuristic": HeuristicSelector,
+    "hybrid": HybridSelector,
 }
 
 
@@ -27,7 +31,9 @@ def load_selector(name: str) -> Selector:
 
 __all__ = [
     "CLIPS_FILENAME",
+    "GeminiSelector",
     "HeuristicSelector",
+    "HybridSelector",
     "Selector",
     "SelectionOutcome",
     "load_selector",

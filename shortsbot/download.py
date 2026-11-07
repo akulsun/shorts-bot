@@ -313,6 +313,19 @@ def _download_url(
             f"the maximum allowed limit of {format_duration(max_duration)}"
         )
 
+    heatmap = (
+        video_info.get("heatmap")
+        or (meta_item.get("heatmap") if "meta_item" in locals() and isinstance(meta_item, dict) else None)
+        or (meta_info.get("heatmap") if "meta_info" in locals() and isinstance(meta_info, dict) else None)
+    )
+    if isinstance(heatmap, list) and heatmap:
+        try:
+            from . import jsonio
+            jsonio.write_json(dest / "heatmap.json", heatmap)
+            log.info("saved YouTube replay heatmap (%d data points)", len(heatmap))
+        except Exception as exc:
+            log.warning("could not write heatmap.json: %s", exc)
+
     raw_title = str(video_info.get("title") or path.stem)
     title = strip_ansi(raw_title) or path.stem
     log.info("downloaded '%s' (%s)", title, format_duration(media.duration))

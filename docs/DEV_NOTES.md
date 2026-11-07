@@ -15,9 +15,12 @@ This document collects architectural decisions, Windows-specific behaviors, and 
   - Cut (`-ss` / `-t`), aspect ratio conversion (center crop or blurred background padding), and caption burn-in are executed in a **single ffmpeg invocation**.
   - Avoiding intermediate intermediate encodes saves significant CPU time and disk I/O.
 * **Swappable Selection Interface**:
-  - `selectors/base.py` defines the `Selector` protocol (`select(transcript, cfg) -> SelectionOutcome`).
-  - `HeuristicSelector` scores candidates based on speech density, keywords, hook presence, sentence completeness, filler words, and pauses.
-  - Adding an LLM or alternative selector only requires creating a class implementing `Selector` and registering it in `shortsbot/selectors/__init__.py`.
+  - `selectors/base.py` defines the `Selector` protocol (`select(transcript, cfg, state) -> SelectionOutcome`).
+  - Available selectors:
+    - `hybrid` (default): Multimodal selection combining acoustic RMS volume spikes (laughter, shouts, climaxes), YouTube crowdsourced replay heatmaps (`heatmap.json`), sentence/thought boundary clamping (`boundaries.py`), and linguistic viral hooks.
+    - `gemini`: Direct LLM semantic selection using the official `google-genai` SDK (`gemini-3.8-flash`) to identify viral hooks, narrative coherence, and payoffs. Gracefully falls back to `hybrid` if `GEMINI_API_KEY` is not set.
+    - `heuristic`: Legacy rule-based scoring based on speech density, keywords, hook presence, sentence completeness, filler words, and pauses.
+  - Adding an alternative selector only requires creating a class implementing `Selector` and registering it in `shortsbot/selectors/__init__.py`.
 * **Render Caching**:
   - `state.json` caches render results with a settings signature (clip bounds, render settings, caption settings).
   - Running the pipeline again reuses existing `.mp4` outputs if settings have not changed, while re-rendering only invalidated clips.

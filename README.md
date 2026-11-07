@@ -11,7 +11,7 @@ The pipeline executes four coordinated stages: **download → transcribe → sel
 - **Local & Private:** Everything runs locally on your CPU. No API keys, cloud accounts, or usage fees required.
 - **Flexible Input:** Accepts YouTube URLs or local video files (`.mp4`, `.mov`, `.mkv`, etc.).
 - **Word-Level Captions:** High-precision subtitle generation via `faster-whisper` (CTranslate2, int8 quantized).
-- **Heuristic Clip Selection:** Automatically detects hook sentences, keyword density, speech rate, and natural speech pauses to score and pick the best 20–60 second clips.
+- **Intelligent Multimodal Clip Selection:** Automatically detects audio volume spikes (laughter/shouts), YouTube crowdsourced replay heatmaps, viral hook patterns, and snaps clip boundaries to complete sentences without mid-word cutoffs. Also supports optional direct semantic analysis with Google Gemini (`gemini-3.8-flash`).
 - **One-Pass Vertical Rendering:** Cuts, aspect-converts (blurred padding or center crop), and burns formatted `.ass` subtitles in a single FFmpeg encode pass.
 - **Smart Caching:** Work folders under `temp/<video_id>/` cache each stage; re-running reuses completed work without re-downloading or re-transcribing.
 - **Desktop GUI & CLI:** Use either the command-line interface or the modern CustomTkinter desktop window.
@@ -67,6 +67,16 @@ The pipeline executes four coordinated stages: **download → transcribe → sel
    ```bash
    python main.py check-env --smoke-whisper
    ```
+
+5. (Optional) Set up Gemini API for semantic viral clip selection:
+   Copy `.env.example` to `.env` and add your API key:
+   - **Windows:** `Copy-Item .env.example .env`
+   - **Linux / macOS:** `cp .env.example .env`
+   Then open `.env` and paste:
+   ```text
+   GEMINI_API_KEY=AIzaSy...
+   ```
+   *(Note: `.env` is already included in `.gitignore` and is never committed to Git).*
 
 ---
 
@@ -132,7 +142,7 @@ All tunables live in [`config.yaml`](file:///c:/Users/Akul/Desktop/shorts-bot/co
 | `selection` | `min_seconds` | `20` | Minimum duration for a selected clip. |
 | `selection` | `max_seconds` | `60` | Maximum duration for a selected clip. |
 | `selection` | `max_clips` | `3` | Maximum number of clips to select and produce. |
-| `selection` | `selector` | `heuristic` | Clip selection algorithm (pluggable via `shortsbot/selectors/base.py`). |
+| `selection` | `selector` | `hybrid` | Clip selection algorithm: `hybrid` (multimodal audio+heatmap+llm), `gemini` (LLM semantic), or `heuristic` (legacy rules). |
 | `selection` | `weights` | `{...}` | Relative weightings for speech density, hook sentences, keywords, filler words, and pauses. |
 | `render` | `crop_mode` | `blur_pad` | `blur_pad` keeps the full original frame overlaid on a blurred background; `center` crops into the center. |
 | `render` | `preset` | `veryfast` | x264 encoding preset (`ultrafast`, `veryfast`, `medium`, etc.). |

@@ -6,3 +6,5 @@ yt-dlp>=2026.10.26
 PyYAML>=6.0
 # Desktop GUI (pure Python; verified on Python 3.14 / Tk 9.0).
 customtkinter==6.0.0
+# Google GenAI SDK for Gemini semantic clip selection
+google-genai>=3.0.0

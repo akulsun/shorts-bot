@@ -66,7 +66,12 @@ class _Window:
 class HeuristicSelector:
     """Scores every legal window, then greedily keeps the best non-overlapping ones."""
 
-    def select(self, transcript: Transcript, cfg: SelectionConfig) -> SelectionOutcome:
+    def select(
+        self,
+        transcript: Transcript,
+        cfg: SelectionConfig,
+        state: State | None = None,
+    ) -> SelectionOutcome:
         segments = transcript.segments
         duration = transcript.duration or (segments[-1].end if segments else 0.0)
 

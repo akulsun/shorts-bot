@@ -51,6 +51,7 @@ whisper-cache/
 # --- Secrets ---
 .env
 .env.*
+!.env.example
 *.key
 *.pem
 secrets.yaml

@@ -29,7 +29,9 @@ def select_clips(
     if max_clips is not None:
         selection = replace(selection, max_clips=max_clips)
 
-    outcome = load_selector(selection.selector).select(transcript, selection)
+    outcome = load_selector(selection.selector).select(
+        transcript, selection, state=state
+    )
 
     path = state.workdir / CLIPS_FILENAME
     jsonio.write_json(

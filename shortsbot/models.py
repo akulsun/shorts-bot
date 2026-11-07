@@ -120,13 +120,14 @@ class Clip:
     text: str
     reason: str = ""
     components: dict[str, float] = field(default_factory=dict)
+    title: str = ""
 
     @property
     def duration(self) -> float:
         return max(0.0, self.end - self.start)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "index": self.index,
             "start": round(self.start, 3),
             "end": round(self.end, 3),
@@ -135,6 +136,9 @@ class Clip:
             "reason": self.reason,
             "components": {key: round(value, 4) for key, value in self.components.items()},
         }
+        if self.title:
+            data["title"] = self.title
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Clip":
@@ -149,4 +153,5 @@ class Clip:
                 str(key): float(value)
                 for key, value in (data.get("components") or {}).items()
             },
+            title=str(data.get("title", "")),
         )

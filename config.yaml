@@ -28,11 +28,21 @@ transcription:
   beam_size: 5
 
 selection:
-  # Swap point for clip picking. "heuristic" is built in.
-  selector: heuristic
-  min_seconds: 20
-  max_seconds: 60
-  max_clips: 3
+  # Swap point for clip picking: "hybrid" (multimodal audio+heatmap+llm),
+  # "heuristic" (legacy rules), or "gemini" (direct LLM semantic selection).
+  selector: hybrid
+  min_seconds: 20.0
+  max_seconds: 60.0
+  max_clips: 10
+  # Use audio energy / RMS spikes (laughter, shouting, climaxes) from audio.wav
+  use_audio_energy: true
+  # Use YouTube crowdsourced replay heatmap if available
+  use_youtube_heatmap: true
+  # LLM settings: Recommended to put GEMINI_API_KEY in .env file (ignored by git).
+  # You can also set api_key directly here or via GEMINI_API_KEY environment variable.
+  api_key: null
+  llm_model: gemini-3.8-flash
+  llm_api_key_env: GEMINI_API_KEY
   keywords:
     - mistake
     - secret
@@ -55,10 +65,12 @@ selection:
   weights:
     speech_density: 1.0
     keywords: 0.8
-    hook: 1.0
-    completeness: 0.6
+    hook: 1.2
+    completeness: 0.8
     filler: 0.5
     silence: 0.5
+    audio_energy: 1.2
+    heatmap: 1.5
 
 render:
   width: 1080
